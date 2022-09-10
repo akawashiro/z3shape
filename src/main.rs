@@ -64,7 +64,48 @@ impl fmt::Display for Z3Exp {
     }
 }
 
-fn gen_constraints(model: &onnx::ModelProto) -> (HashSet<Z3Exp>, Vec<Z3Exp>){
+fn dims_dec(s: String) -> Z3Exp {
+    Z3Exp::DecareConst(s, Z3Type::List(Box::new(Z3Type::Int)))
+}
+
+fn ass_eq(e1: Z3Exp, e2: Z3Exp) -> Z3Exp {
+    Z3Exp::Assert(Box::new(Z3Exp::Equal(Box::new(e1), Box::new(e2))))
+}
+
+fn head(e: Z3Exp) -> Z3Exp {
+    Z3Exp::Head(Box::new(e))
+}
+
+fn tail(e: Z3Exp) -> Z3Exp {
+    Z3Exp::Tail(Box::new(e))
+}
+
+fn plus(e1: Z3Exp, e2: Z3Exp) -> Z3Exp {
+    Z3Exp::Plus(Box::new(e1), Box::new(e2))
+}
+
+fn mul(e1: Z3Exp, e2: Z3Exp) -> Z3Exp {
+    Z3Exp::Mul(Box::new(e1), Box::new(e2))
+}
+
+fn sub(e1: Z3Exp, e2: Z3Exp) -> Z3Exp {
+    Z3Exp::Sub(Box::new(e1), Box::new(e2))
+}
+
+fn div(e1: Z3Exp, e2: Z3Exp) -> Z3Exp {
+    Z3Exp::Div(Box::new(e1), Box::new(e2))
+}
+
+fn int(i: i64) -> Z3Exp {
+    Z3Exp::Int(i)
+}
+
+#[test]
+fn diplay_test() {
+    assert_eq!("(* 10 42)", format!("{}", mul(int(10), int(42))));
+}
+
+fn gen_constraints(model: &onnx::ModelProto) -> (HashSet<Z3Exp>, Vec<Z3Exp>) {
     let mut decares = HashSet::new();
     let mut conditions = Vec::new();
 
@@ -96,42 +137,6 @@ fn gen_constraints(model: &onnx::ModelProto) -> (HashSet<Z3Exp>, Vec<Z3Exp>){
             name_e = Z3Exp::Tail(Box::new(name_e));
             conditions.push(eq);
         }
-    }
-
-    fn dims_dec(s: String) -> Z3Exp {
-        Z3Exp::DecareConst(s, Z3Type::List(Box::new(Z3Type::Int)))
-    }
-
-    fn ass_eq(e1: Z3Exp, e2: Z3Exp) -> Z3Exp {
-        Z3Exp::Assert(Box::new(Z3Exp::Equal(Box::new(e1), Box::new(e2))))
-    }
-
-    fn head(e: Z3Exp) -> Z3Exp {
-        Z3Exp::Head(Box::new(e))
-    }
-
-    fn tail(e: Z3Exp) -> Z3Exp {
-        Z3Exp::Tail(Box::new(e))
-    }
-
-    fn plus(e1: Z3Exp, e2: Z3Exp) -> Z3Exp {
-        Z3Exp::Plus(Box::new(e1), Box::new(e2))
-    }
-
-    fn mul(e1: Z3Exp, e2: Z3Exp) -> Z3Exp {
-        Z3Exp::Mul(Box::new(e1), Box::new(e2))
-    }
-
-    fn sub(e1: Z3Exp, e2: Z3Exp) -> Z3Exp {
-        Z3Exp::Sub(Box::new(e1), Box::new(e2))
-    }
-
-    fn div(e1: Z3Exp, e2: Z3Exp) -> Z3Exp {
-        Z3Exp::Div(Box::new(e1), Box::new(e2))
-    }
-
-    fn int(i: i64) -> Z3Exp {
-        Z3Exp::Int(i)
     }
 
     for node in model.graph.node.iter() {
