@@ -2,6 +2,11 @@
 
 Infer tensor shapes in ONNX using Z3.
 
+## Run tests
+```
+cargo test -- --nocapture
+```
+
 ## TODO
 - Constant propagation for Reshape
 - Improve coverage

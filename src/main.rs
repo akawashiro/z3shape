@@ -1,4 +1,5 @@
 extern crate protobuf;
+extern crate reqwest;
 
 use protobuf::{CodedInputStream, Message};
 use std::collections::HashSet;
@@ -352,10 +353,7 @@ fn gen_constraints(model: &onnx::ModelProto) -> (HashSet<Z3Exp>, Vec<Z3Exp>) {
     (decares, conditions)
 }
 
-fn main() {
-    assert_eq!(std::env::args().len(), 2);
-    let arg1 = std::env::args().nth(1).unwrap();
-    let onnx_path = Path::new(&arg1);
+fn shape_infer(onnx_path: &Path) {
     let file = File::open(onnx_path).expect("fail to open file");
     let mut buffered_reader = BufReader::new(file);
     let mut cis = CodedInputStream::from_buf_read(&mut buffered_reader);
@@ -365,7 +363,7 @@ fn main() {
 
     let (decares, conditions) = gen_constraints(&model);
 
-    let smt_filename = arg1.clone() + "_shape_inference.smtlib2";
+    let smt_filename = onnx_path.to_str().unwrap().to_owned() + "_shape_inference.smtlib2";
     let mut smt_file = File::create(smt_filename.clone()).unwrap();
     let mut contents = String::from("");
     for d in decares.iter() {
@@ -387,7 +385,8 @@ fn main() {
     if output.status.success() {
         let result = String::from_utf8_lossy(&output.stdout);
 
-        let result_filename = arg1 + "_shape_inference_result.smtlib2";
+        let result_filename =
+            onnx_path.to_str().unwrap().to_owned() + "_shape_inference_result.smtlib2";
         let mut result_file = File::create(&result_filename).unwrap();
         result_file.write_all(result.as_bytes()).unwrap();
         println!("Check: {:}", result_filename);
@@ -395,4 +394,32 @@ fn main() {
         let s = String::from_utf8_lossy(&output.stderr);
         print!("{}", s);
     }
+}
+
+#[test]
+fn e2e_test() {
+    let mut testcases = Vec::new();
+    testcases.push((Path::new("squeezenet1.1-7.onnx"), "https://github.com/onnx/models/raw/main/vision/classification/squeezenet/model/squeezenet1.1-7.onnx"));
+    // TODO
+    // testcases.push((Path::new("tinyyolov2-7.onnx"), "https://github.com/onnx/models/raw/main/vision/object_detection_segmentation/tiny-yolov2/model/tinyyolov2-7.onnx"));
+    // testcases.push((Path::new("bidaf-9.onnx"), "https://github.com/onnx/models/raw/main/text/machine_comprehension/bidirectional_attention_flow/model/bidaf-9.onnx"));
+    for (file, url) in testcases.iter() {
+        if !file.exists() {
+            println!("Download {} from github", file.to_string_lossy());
+            let responce = reqwest::blocking::get(*url)
+                .expect(&(String::from("Failed to download from ") + url));
+            let contents = responce.bytes().expect("No contents in response");
+            let mut out = File::create(file).expect("failed to create file");
+            out.write_all(&contents).expect("Failed to write contents to the file");
+        }
+        shape_infer(file);
+    }
+}
+
+fn main() {
+    assert_eq!(std::env::args().len(), 2);
+    let arg1 = std::env::args().nth(1).unwrap();
+    let onnx_path = Path::new(&arg1);
+
+    shape_infer(onnx_path);
 }
