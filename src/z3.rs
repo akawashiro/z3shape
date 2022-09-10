@@ -1,10 +1,10 @@
 use nom::{
     branch::alt,
-    multi::many0_count,
     bytes::complete::tag,
     character::complete::{alpha1, alphanumeric1, char, digit1, multispace0},
     combinator::{cut, map, map_res, recognize},
     error::{context, VerboseError},
+    multi::many0_count,
     sequence::{delimited, pair, preceded, terminated, tuple},
     IResult,
 };
@@ -13,6 +13,7 @@ use std::fmt;
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
 pub enum Z3Type {
     Int,
+    Void,
     List(Box<Z3Type>),
 }
 
@@ -20,6 +21,7 @@ impl fmt::Display for Z3Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Z3Type::Int => write!(f, "Int"),
+            Z3Type::Void => write!(f, "()"),
             Z3Type::List(ty) => write!(f, "(List {:})", ty),
         }
     }
@@ -42,6 +44,7 @@ pub enum Z3Exp {
     Int(i64),
     Nil,
     Insert(Box<Z3Exp>, Box<Z3Exp>),
+    DefineFun(String, Box<Z3Type>, Box<Z3Type>, Box<Z3Exp>),
 }
 
 impl fmt::Display for Z3Exp {
@@ -62,6 +65,9 @@ impl fmt::Display for Z3Exp {
             Z3Exp::Int(i) => write!(f, "{:}", i),
             Z3Exp::Nil => write!(f, "nil"),
             Z3Exp::Insert(exp1, exp2) => write!(f, "(insert {:} {:})", exp1, exp2),
+            Z3Exp::DefineFun(n, t1, t2, e) => {
+                write!(f, "(define-fun {:} {:} {:} {:})", n, t1, t2, e)
+            }
         }
     }
 }
@@ -125,7 +131,7 @@ fn identifier<'a>(input: &'a str) -> IResult<&str, &str, VerboseError<&'a str>> 
 }
 
 fn parse_variable<'a>(i: &'a str) -> IResult<&'a str, Z3Exp, VerboseError<&'a str>> {
-    map(identifier, | s: &str | { Z3Exp::Variable(String::from(s)) })(i)
+    map(identifier, |s: &str| Z3Exp::Variable(String::from(s)))(i)
 }
 
 fn parse_nil<'a>(i: &'a str) -> IResult<&'a str, Z3Exp, VerboseError<&'a str>> {
@@ -249,6 +255,22 @@ fn parse_assert<'a>(i: &'a str) -> IResult<&'a str, Z3Exp, VerboseError<&'a str>
     )(i)
 }
 
+fn parse_define_fun<'a>(i: &'a str) -> IResult<&'a str, Z3Exp, VerboseError<&'a str>> {
+    delimited(
+        char('('),
+        map(
+            preceded(
+                terminated(tag("define-fun"), multispace0),
+                tuple((identifier, parse_type, parse_type, parse_expr)),
+            ),
+            |(id, t1, t2, e)| {
+                Z3Exp::DefineFun(String::from(id), Box::new(t1), Box::new(t2), Box::new(e))
+            },
+        ),
+        context("closing paren", cut(preceded(multispace0, char(')')))),
+    )(i)
+}
+
 fn parse_check_sat<'a>(i: &'a str) -> IResult<&'a str, Z3Exp, VerboseError<&'a str>> {
     delimited(
         char('('),
@@ -283,6 +305,7 @@ fn parse_expr<'a>(i: &'a str) -> IResult<&'a str, Z3Exp, VerboseError<&'a str>> 
             parse_check_sat,
             parse_get_model,
             parse_variable,
+            parse_define_fun,
         )),
     )(i)
 }
@@ -322,29 +345,38 @@ fn test_parse_expr() {
         parse_expr("(insert   1    nil)"),
         Ok(("", insert(int(1), Z3Exp::Nil)))
     );
+
+    assert_eq!(parse_expr("(define-fun squeezenet0_conv8_weight_shape () (List Int) (insert 128 (insert 32 (insert 1 (insert 1 nil)))))"), Ok(("", Z3Exp::DefineFun(String::from("squeezenet0_conv8_weight_shape"), Box::new(Z3Type::Void), Box::new(Z3Type::List(Box::new(Z3Type::Int))), Box::new(insert(int(128), insert(int(32), insert(int(1), insert(int(1), Z3Exp::Nil)))))))));
 }
 
 fn parse_primitive_type<'a>(i: &'a str) -> IResult<&'a str, Z3Type, VerboseError<&'a str>> {
-    map(tag("Int"), |_| Z3Type::Int)(i)
+    alt((
+        map(tag("Int"), |_| Z3Type::Int),
+        map(tag("()"), |_| Z3Type::Void),
+    ))(i)
 }
 
 fn parse_type<'a>(i: &'a str) -> IResult<&'a str, Z3Type, VerboseError<&'a str>> {
-    alt((
-        parse_primitive_type,
-        delimited(
-            char('('),
-            map(
-                preceded(terminated(tag("List"), multispace0), parse_type),
-                |elem| Z3Type::List(Box::new(elem)),
+    preceded(
+        multispace0,
+        alt((
+            parse_primitive_type,
+            delimited(
+                char('('),
+                map(
+                    preceded(terminated(tag("List"), multispace0), parse_type),
+                    |elem| Z3Type::List(Box::new(elem)),
+                ),
+                context("closing paren", cut(preceded(multispace0, char(')')))),
             ),
-            context("closing paren", cut(preceded(multispace0, char(')')))),
-        ),
-    ))(i)
+        )),
+    )(i)
 }
 
 #[test]
 fn test_parse_type() {
     assert_eq!(parse_type("Int"), Ok(("", Z3Type::Int)));
+    assert_eq!(parse_type("()"), Ok(("", Z3Type::Void)));
     assert_eq!(
         parse_type("(List Int)"),
         Ok(("", Z3Type::List(Box::new(Z3Type::Int))))
