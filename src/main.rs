@@ -1,19 +1,8 @@
 extern crate protobuf;
 extern crate reqwest;
 
-use nom::{
-    branch::alt,
-    bytes::complete::tag,
-    character::complete::{alpha1, char, digit1, multispace0, multispace1, one_of},
-    combinator::{cut, map, map_res, opt},
-    error::{context, VerboseError},
-    multi::many0,
-    sequence::{delimited, preceded, terminated, tuple},
-    IResult, Parser,
-};
 use protobuf::{CodedInputStream, Message};
 use std::collections::HashSet;
-use std::fmt;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
@@ -22,113 +11,8 @@ use std::process::Command;
 
 mod onnx;
 use onnx::ModelProto;
-
-#[derive(PartialEq, Eq, Hash, Clone, Debug)]
-enum Z3Type {
-    Int,
-    List(Box<Z3Type>),
-}
-
-impl fmt::Display for Z3Type {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Z3Type::Int => write!(f, "Int"),
-            Z3Type::List(ty) => write!(f, "(List {:})", ty),
-        }
-    }
-}
-
-#[derive(PartialEq, Eq, Hash, Clone, Debug)]
-enum Z3Exp {
-    DecareConst(String, Z3Type),
-    Assert(Box<Z3Exp>),
-    Equal(Box<Z3Exp>, Box<Z3Exp>),
-    CheckSat,
-    GetModel,
-    Variable(String),
-    Head(Box<Z3Exp>),
-    Tail(Box<Z3Exp>),
-    Plus(Box<Z3Exp>, Box<Z3Exp>),
-    Mul(Box<Z3Exp>, Box<Z3Exp>),
-    Sub(Box<Z3Exp>, Box<Z3Exp>),
-    Div(Box<Z3Exp>, Box<Z3Exp>),
-    Int(i64),
-}
-
-impl fmt::Display for Z3Exp {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Z3Exp::DecareConst(val, ty) => write!(f, "(declare-const {:} {:})", val, ty),
-            Z3Exp::Assert(exp) => write!(f, "(assert {:})", exp),
-            Z3Exp::Equal(exp1, exp2) => write!(f, "(= {:} {:})", exp1, exp2),
-            Z3Exp::CheckSat => write!(f, "(check-sat)"),
-            Z3Exp::GetModel => write!(f, "(get-model)"),
-            Z3Exp::Variable(var) => write!(f, "{:}", var),
-            Z3Exp::Head(exp) => write!(f, "(head {:})", exp),
-            Z3Exp::Tail(exp) => write!(f, "(tail {:})", exp),
-            Z3Exp::Plus(exp1, exp2) => write!(f, "(+ {:} {:})", exp1, exp2),
-            Z3Exp::Mul(exp1, exp2) => write!(f, "(* {:} {:})", exp1, exp2),
-            Z3Exp::Sub(exp1, exp2) => write!(f, "(- {:} {:})", exp1, exp2),
-            Z3Exp::Div(exp1, exp2) => write!(f, "(div {:} {:})", exp1, exp2),
-            Z3Exp::Int(i) => write!(f, "{:}", i),
-        }
-    }
-}
-
-fn dims_dec(s: String) -> Z3Exp {
-    Z3Exp::DecareConst(s, Z3Type::List(Box::new(Z3Type::Int)))
-}
-
-fn ass_eq(e1: Z3Exp, e2: Z3Exp) -> Z3Exp {
-    Z3Exp::Assert(Box::new(Z3Exp::Equal(Box::new(e1), Box::new(e2))))
-}
-
-fn head(e: Z3Exp) -> Z3Exp {
-    Z3Exp::Head(Box::new(e))
-}
-
-fn tail(e: Z3Exp) -> Z3Exp {
-    Z3Exp::Tail(Box::new(e))
-}
-
-fn plus(e1: Z3Exp, e2: Z3Exp) -> Z3Exp {
-    Z3Exp::Plus(Box::new(e1), Box::new(e2))
-}
-
-fn mul(e1: Z3Exp, e2: Z3Exp) -> Z3Exp {
-    Z3Exp::Mul(Box::new(e1), Box::new(e2))
-}
-
-fn sub(e1: Z3Exp, e2: Z3Exp) -> Z3Exp {
-    Z3Exp::Sub(Box::new(e1), Box::new(e2))
-}
-
-fn div(e1: Z3Exp, e2: Z3Exp) -> Z3Exp {
-    Z3Exp::Div(Box::new(e1), Box::new(e2))
-}
-
-fn int(i: i64) -> Z3Exp {
-    Z3Exp::Int(i)
-}
-
-#[test]
-fn diplay_test() {
-    assert_eq!("(* 10 42)", format!("{}", mul(int(10), int(42))));
-}
-
-fn parse_num<'a>(i: &'a str) -> IResult<&'a str, Z3Exp, VerboseError<&'a str>> {
-    alt((
-        map_res(digit1, |digit_str: &str| digit_str.parse::<i64>().map(int)),
-        map(preceded(tag("-"), digit1), |digit_str: &str| {
-            int(-1 * digit_str.parse::<i64>().unwrap())
-        }),
-    ))(i)
-}
-
-#[test]
-fn test_parse_num(){
-    assert_eq!(parse_num("42"), Ok(("", int(42))));
-}
+mod z3;
+use crate::z3::*;
 
 fn gen_constraints(model: &onnx::ModelProto) -> (HashSet<Z3Exp>, Vec<Z3Exp>) {
     let mut decares = HashSet::new();
