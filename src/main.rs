@@ -1,6 +1,16 @@
 extern crate protobuf;
 extern crate reqwest;
 
+use nom::{
+    branch::alt,
+    bytes::complete::tag,
+    character::complete::{alpha1, char, digit1, multispace0, multispace1, one_of},
+    combinator::{cut, map, map_res, opt},
+    error::{context, VerboseError},
+    multi::many0,
+    sequence::{delimited, preceded, terminated, tuple},
+    IResult, Parser,
+};
 use protobuf::{CodedInputStream, Message};
 use std::collections::HashSet;
 use std::fmt;
@@ -13,7 +23,7 @@ use std::process::Command;
 mod onnx;
 use onnx::ModelProto;
 
-#[derive(PartialEq, Eq, Hash, Clone)]
+#[derive(PartialEq, Eq, Hash, Clone, Debug)]
 enum Z3Type {
     Int,
     List(Box<Z3Type>),
@@ -28,7 +38,7 @@ impl fmt::Display for Z3Type {
     }
 }
 
-#[derive(PartialEq, Eq, Hash, Clone)]
+#[derive(PartialEq, Eq, Hash, Clone, Debug)]
 enum Z3Exp {
     DecareConst(String, Z3Type),
     Assert(Box<Z3Exp>),
@@ -104,6 +114,20 @@ fn int(i: i64) -> Z3Exp {
 #[test]
 fn diplay_test() {
     assert_eq!("(* 10 42)", format!("{}", mul(int(10), int(42))));
+}
+
+fn parse_num<'a>(i: &'a str) -> IResult<&'a str, Z3Exp, VerboseError<&'a str>> {
+    alt((
+        map_res(digit1, |digit_str: &str| digit_str.parse::<i64>().map(int)),
+        map(preceded(tag("-"), digit1), |digit_str: &str| {
+            int(-1 * digit_str.parse::<i64>().unwrap())
+        }),
+    ))(i)
+}
+
+#[test]
+fn test_parse_num(){
+    assert_eq!(parse_num("42"), Ok(("", int(42))));
 }
 
 fn gen_constraints(model: &onnx::ModelProto) -> (HashSet<Z3Exp>, Vec<Z3Exp>) {
@@ -410,7 +434,8 @@ fn e2e_test() {
                 .expect(&(String::from("Failed to download from ") + url));
             let contents = responce.bytes().expect("No contents in response");
             let mut out = File::create(file).expect("failed to create file");
-            out.write_all(&contents).expect("Failed to write contents to the file");
+            out.write_all(&contents)
+                .expect("Failed to write contents to the file");
         }
         shape_infer(file);
     }
