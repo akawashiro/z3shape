@@ -41,6 +41,7 @@ pub enum Z3Exp {
     Div(Box<Z3Exp>, Box<Z3Exp>),
     Int(i64),
     Nil,
+    Insert(Box<Z3Exp>, Box<Z3Exp>),
 }
 
 impl fmt::Display for Z3Exp {
@@ -60,6 +61,7 @@ impl fmt::Display for Z3Exp {
             Z3Exp::Div(exp1, exp2) => write!(f, "(div {:} {:})", exp1, exp2),
             Z3Exp::Int(i) => write!(f, "{:}", i),
             Z3Exp::Nil => write!(f, "nil"),
+            Z3Exp::Insert(exp1, exp2) => write!(f, "(insert {:} {:})", exp1, exp2),
         }
     }
 }
@@ -100,6 +102,10 @@ pub fn int(i: i64) -> Z3Exp {
     Z3Exp::Int(i)
 }
 
+pub fn insert(e1: Z3Exp, e2: Z3Exp) -> Z3Exp {
+    Z3Exp::Insert(Box::new(e1), Box::new(e2))
+}
+
 #[test]
 fn diplay_test() {
     assert_eq!("(* 10 42)", format!("{}", mul(int(10), int(42))));
@@ -114,8 +120,169 @@ fn parse_num<'a>(i: &'a str) -> IResult<&'a str, Z3Exp, VerboseError<&'a str>> {
     ))(i)
 }
 
+fn parse_nil<'a>(i: &'a str) -> IResult<&'a str, Z3Exp, VerboseError<&'a str>> {
+    map(tag("nil"), |_| Z3Exp::Nil)(i)
+}
+
+fn parse_insert<'a>(i: &'a str) -> IResult<&'a str, Z3Exp, VerboseError<&'a str>> {
+    delimited(
+        char('('),
+        map(
+            preceded(
+                terminated(tag("insert"), multispace0),
+                tuple((parse_expr, parse_expr)),
+            ),
+            |(e1, e2)| insert(e1, e2),
+        ),
+        context("closing paren", cut(preceded(multispace0, char(')')))),
+    )(i)
+}
+
+fn parse_plus<'a>(i: &'a str) -> IResult<&'a str, Z3Exp, VerboseError<&'a str>> {
+    delimited(
+        char('('),
+        map(
+            preceded(
+                terminated(tag("+"), multispace0),
+                tuple((parse_expr, parse_expr)),
+            ),
+            |(e1, e2)| plus(e1, e2),
+        ),
+        context("closing paren", cut(preceded(multispace0, char(')')))),
+    )(i)
+}
+
+fn parse_mul<'a>(i: &'a str) -> IResult<&'a str, Z3Exp, VerboseError<&'a str>> {
+    delimited(
+        char('('),
+        map(
+            preceded(
+                terminated(tag("*"), multispace0),
+                tuple((parse_expr, parse_expr)),
+            ),
+            |(e1, e2)| mul(e1, e2),
+        ),
+        context("closing paren", cut(preceded(multispace0, char(')')))),
+    )(i)
+}
+
+fn parse_div<'a>(i: &'a str) -> IResult<&'a str, Z3Exp, VerboseError<&'a str>> {
+    delimited(
+        char('('),
+        map(
+            preceded(
+                terminated(tag("div"), multispace0),
+                tuple((parse_expr, parse_expr)),
+            ),
+            |(e1, e2)| div(e1, e2),
+        ),
+        context("closing paren", cut(preceded(multispace0, char(')')))),
+    )(i)
+}
+
+fn parse_sub<'a>(i: &'a str) -> IResult<&'a str, Z3Exp, VerboseError<&'a str>> {
+    delimited(
+        char('('),
+        map(
+            preceded(
+                terminated(tag("-"), multispace0),
+                tuple((parse_expr, parse_expr)),
+            ),
+            |(e1, e2)| sub(e1, e2),
+        ),
+        context("closing paren", cut(preceded(multispace0, char(')')))),
+    )(i)
+}
+
+fn parse_equal<'a>(i: &'a str) -> IResult<&'a str, Z3Exp, VerboseError<&'a str>> {
+    delimited(
+        char('('),
+        map(
+            preceded(
+                terminated(tag("="), multispace0),
+                tuple((parse_expr, parse_expr)),
+            ),
+            |(e1, e2)| Z3Exp::Equal(Box::new(e1), Box::new(e2)),
+        ),
+        context("closing paren", cut(preceded(multispace0, char(')')))),
+    )(i)
+}
+
+fn parse_head<'a>(i: &'a str) -> IResult<&'a str, Z3Exp, VerboseError<&'a str>> {
+    delimited(
+        char('('),
+        map(
+            preceded(terminated(tag("head"), multispace0), parse_expr),
+            |e| head(e),
+        ),
+        context("closing paren", cut(preceded(multispace0, char(')')))),
+    )(i)
+}
+
+fn parse_tail<'a>(i: &'a str) -> IResult<&'a str, Z3Exp, VerboseError<&'a str>> {
+    delimited(
+        char('('),
+        map(
+            preceded(terminated(tag("tail"), multispace0), parse_expr),
+            |e| tail(e),
+        ),
+        context("closing paren", cut(preceded(multispace0, char(')')))),
+    )(i)
+}
+
+fn parse_assert<'a>(i: &'a str) -> IResult<&'a str, Z3Exp, VerboseError<&'a str>> {
+    delimited(
+        char('('),
+        map(
+            preceded(terminated(tag("assert"), multispace0), parse_expr),
+            |e| Z3Exp::Assert(Box::new(e)),
+        ),
+        context("closing paren", cut(preceded(multispace0, char(')')))),
+    )(i)
+}
+
+fn parse_check_sat<'a>(i: &'a str) -> IResult<&'a str, Z3Exp, VerboseError<&'a str>> {
+    delimited(
+        char('('),
+        map(
+            preceded(tag("check-sat"), multispace0),
+            |_| Z3Exp::CheckSat,
+        ),
+        context("closing paren", cut(preceded(multispace0, char(')')))),
+    )(i)
+}
+
+
+fn parse_get_model<'a>(i: &'a str) -> IResult<&'a str, Z3Exp, VerboseError<&'a str>> {
+    delimited(
+        char('('),
+        map(
+            preceded(tag("get-model"), multispace0),
+            |_| Z3Exp::GetModel,
+        ),
+        context("closing paren", cut(preceded(multispace0, char(')')))),
+    )(i)
+}
+
 fn parse_expr<'a>(i: &'a str) -> IResult<&'a str, Z3Exp, VerboseError<&'a str>> {
-    alt((parse_num,))(i)
+    preceded(
+        multispace0,
+        alt((
+            parse_num,
+            parse_nil,
+            parse_insert,
+            parse_head,
+            parse_tail,
+            parse_assert,
+            parse_sub,
+            parse_plus,
+            parse_mul,
+            parse_div,
+            parse_equal,
+            parse_check_sat,
+            parse_get_model
+        )),
+    )(i)
 }
 
 #[test]
@@ -125,9 +292,35 @@ fn test_parse_num() {
 
 #[test]
 fn test_parse_expr() {
-    assert_eq!(parse_num("42"), Ok(("", int(42))));
-}
+    let mut testcases = Vec::new();
+    testcases.push(int(42));
+    testcases.push(Z3Exp::Nil);
+    testcases.push(insert(int(1), Z3Exp::Nil));
+    testcases.push(head(insert(int(1), Z3Exp::Nil)));
+    testcases.push(tail(insert(int(1), Z3Exp::Nil)));
+    testcases.push(Z3Exp::Assert(Box::new(int(42))));
+    testcases.push(ass_eq(int(10), int(10)));
+    testcases.push(plus(int(4), int(3)));
+    testcases.push(mul(int(4), int(3)));
+    testcases.push(sub(int(4), int(3)));
+    testcases.push(div(int(4), int(3)));
+    testcases.push(Z3Exp::CheckSat);
+    testcases.push(Z3Exp::GetModel);
+    testcases.push(Z3Exp::Variable(String::from("hoge")));
+    testcases.push(Z3Exp::Variable(String::from("hoge_fuga")));
+    testcases.push(Z3Exp::Variable(String::from("h123")));
+    testcases.push(Z3Exp::Variable(String::from("h_123")));
+    for e in testcases.iter() {
+        let s = format!("{:}", e);
+        assert_eq!(parse_expr(&s), Ok(("", e.clone())));
+    }
 
+    // Many spaces test
+    assert_eq!(
+        parse_expr("(insert   1    nil)"),
+        Ok(("", insert(int(1), Z3Exp::Nil)))
+    );
+}
 
 fn parse_primitive_type<'a>(i: &'a str) -> IResult<&'a str, Z3Type, VerboseError<&'a str>> {
     map(tag("Int"), |_| Z3Type::Int)(i)
