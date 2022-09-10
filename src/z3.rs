@@ -1,12 +1,12 @@
 use nom::{
     branch::alt,
+    multi::many0_count,
     bytes::complete::tag,
-    character::complete::{alpha1, char, digit1, multispace0, multispace1, one_of},
-    combinator::{cut, map, map_res, opt},
+    character::complete::{alpha1, alphanumeric1, char, digit1, multispace0},
+    combinator::{cut, map, map_res, recognize},
     error::{context, VerboseError},
-    multi::many0,
-    sequence::{delimited, preceded, terminated, tuple},
-    IResult, Parser,
+    sequence::{delimited, pair, preceded, terminated, tuple},
+    IResult,
 };
 use std::fmt;
 
@@ -118,6 +118,14 @@ fn parse_num<'a>(i: &'a str) -> IResult<&'a str, Z3Exp, VerboseError<&'a str>> {
             int(-1 * digit_str.parse::<i64>().unwrap())
         }),
     ))(i)
+}
+
+fn identifier<'a>(input: &'a str) -> IResult<&str, &str, VerboseError<&'a str>> {
+    recognize(pair(alpha1, many0_count(alt((alphanumeric1, tag("_"))))))(input)
+}
+
+fn parse_variable<'a>(i: &'a str) -> IResult<&'a str, Z3Exp, VerboseError<&'a str>> {
+    map(identifier, | s: &str | { Z3Exp::Variable(String::from(s)) })(i)
 }
 
 fn parse_nil<'a>(i: &'a str) -> IResult<&'a str, Z3Exp, VerboseError<&'a str>> {
@@ -244,22 +252,15 @@ fn parse_assert<'a>(i: &'a str) -> IResult<&'a str, Z3Exp, VerboseError<&'a str>
 fn parse_check_sat<'a>(i: &'a str) -> IResult<&'a str, Z3Exp, VerboseError<&'a str>> {
     delimited(
         char('('),
-        map(
-            preceded(tag("check-sat"), multispace0),
-            |_| Z3Exp::CheckSat,
-        ),
+        map(preceded(tag("check-sat"), multispace0), |_| Z3Exp::CheckSat),
         context("closing paren", cut(preceded(multispace0, char(')')))),
     )(i)
 }
 
-
 fn parse_get_model<'a>(i: &'a str) -> IResult<&'a str, Z3Exp, VerboseError<&'a str>> {
     delimited(
         char('('),
-        map(
-            preceded(tag("get-model"), multispace0),
-            |_| Z3Exp::GetModel,
-        ),
+        map(preceded(tag("get-model"), multispace0), |_| Z3Exp::GetModel),
         context("closing paren", cut(preceded(multispace0, char(')')))),
     )(i)
 }
@@ -280,7 +281,8 @@ fn parse_expr<'a>(i: &'a str) -> IResult<&'a str, Z3Exp, VerboseError<&'a str>> 
             parse_div,
             parse_equal,
             parse_check_sat,
-            parse_get_model
+            parse_get_model,
+            parse_variable,
         )),
     )(i)
 }
