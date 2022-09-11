@@ -50,7 +50,7 @@ pub enum Z3Exp {
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
 pub struct Z3Result {
     is_sat: bool,
-    shapes: Vec<Z3Exp>,
+    pub shapes: Vec<Z3Exp>,
 }
 
 impl fmt::Display for Z3Exp {

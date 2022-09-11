@@ -261,6 +261,30 @@ fn gen_constraints(model: &onnx::ModelProto) -> (HashSet<Z3Exp>, Vec<Z3Exp>) {
     (decares, conditions)
 }
 
+fn int_list_expr_to_vec(e: Z3Exp) -> Vec<i64>{
+    match e {
+        Z3Exp::Insert(e1, e2) =>{
+            if let Z3Exp::Int(i) = *e1 {
+                let mut v = int_list_expr_to_vec(*e2);
+                v.insert(0, i);
+                v
+            }else{
+                unreachable!("int_list_expr_to_vec finds non integer elements in the list")
+            }
+        },
+        Z3Exp::Nil => Vec::new(),
+        _ => unreachable!("int_list_expr_to_vec takes non list input {:}", e)
+    }
+}
+
+fn print_result(result: Z3Result) -> () {
+    for s in result.shapes.iter() {
+        if let Z3Exp::DefineFun(name, _, _, e) = s {
+            println!("{:}: {:?}", name, int_list_expr_to_vec(*(*e).clone()));
+        }
+    }
+}
+
 fn shape_infer(onnx_path: &Path) {
     let file = File::open(onnx_path).expect("fail to open file");
     let mut buffered_reader = BufReader::new(file);
@@ -292,6 +316,11 @@ fn shape_infer(onnx_path: &Path) {
 
     if output.status.success() {
         let result = String::from_utf8_lossy(&output.stdout);
+        if let Ok((_, parsed)) = parse_z3_result(&result) {
+            print_result(parsed);
+        }else{
+            unreachable!("Failed to parse the result");
+        }
 
         let result_filename =
             onnx_path.to_str().unwrap().to_owned() + "_shape_inference_result.smtlib2";
@@ -317,7 +346,6 @@ fn e2e_test() {
             let responce = reqwest::blocking::get(*url)
                 .expect(&(String::from("Failed to download from ") + url));
             let contents = responce.bytes().expect("No contents in response");
-            let parsed = parse_z3_result(contents);
             let mut out = File::create(file).expect("failed to create file");
             out.write_all(&contents)
                 .expect("Failed to write contents to the file");
