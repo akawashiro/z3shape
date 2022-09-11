@@ -317,6 +317,7 @@ fn e2e_test() {
             let responce = reqwest::blocking::get(*url)
                 .expect(&(String::from("Failed to download from ") + url));
             let contents = responce.bytes().expect("No contents in response");
+            let parsed = parse_z3_result(contents);
             let mut out = File::create(file).expect("failed to create file");
             out.write_all(&contents)
                 .expect("Failed to write contents to the file");

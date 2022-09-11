@@ -393,7 +393,7 @@ fn test_parse_type() {
     );
 }
 
-fn parse_z3_result<'a>(i: &'a str) -> IResult<&'a str, Z3Result, VerboseError<&'a str>> {
+pub fn parse_z3_result<'a>(i: &'a str) -> IResult<&'a str, Z3Result, VerboseError<&'a str>> {
     preceded(
         terminated(tag("sat"), multispace0),
         delimited(
