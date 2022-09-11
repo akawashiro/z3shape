@@ -4,7 +4,7 @@ use nom::{
     character::complete::{alpha1, alphanumeric1, char, digit1, multispace0},
     combinator::{cut, map, map_res, recognize},
     error::{context, VerboseError},
-    multi::many0_count,
+    multi::{fold_many0, many0_count},
     sequence::{delimited, pair, preceded, terminated, tuple},
     IResult,
 };
@@ -45,6 +45,12 @@ pub enum Z3Exp {
     Nil,
     Insert(Box<Z3Exp>, Box<Z3Exp>),
     DefineFun(String, Box<Z3Type>, Box<Z3Type>, Box<Z3Exp>),
+}
+
+#[derive(PartialEq, Eq, Hash, Clone, Debug)]
+pub struct Z3Result {
+    is_sat: bool,
+    shapes: Vec<Z3Exp>,
 }
 
 impl fmt::Display for Z3Exp {
@@ -385,4 +391,43 @@ fn test_parse_type() {
         parse_type("(List       Int)"),
         Ok(("", Z3Type::List(Box::new(Z3Type::Int))))
     );
+}
+
+fn parse_z3_result<'a>(i: &'a str) -> IResult<&'a str, Z3Result, VerboseError<&'a str>> {
+    preceded(
+        terminated(tag("sat"), multispace0),
+        delimited(
+            char('('),
+            map(
+                fold_many0(parse_expr, Vec::new, |mut acc: Vec<Z3Exp>, item| {
+                    acc.push(item);
+                    acc
+                }),
+                |ds| Z3Result {
+                    is_sat: true,
+                    shapes: ds,
+                },
+            ),
+            context("closing paren", cut(preceded(multispace0, char(')')))),
+        ),
+    )(i)
+}
+
+#[test]
+fn test_parse_z3_result() {
+    let input = r##"sat
+(
+  (define-fun squeezenet0_conv8_weight_shape () (List Int)
+    (insert 128 (insert 32 (insert 1 nil))))
+  (define-fun squeezenet0_dropout0_fwd_shape () (List Int)
+    (insert 1 (insert 512 (insert 13 (insert 13 nil)))))
+)"##;
+    let result = parse_z3_result(input);
+    if let Ok((remainder, parsed)) = result {
+        assert_eq!(parsed.is_sat, true);
+        assert_eq!(parsed.shapes.len(), 2);
+        assert_eq!(remainder, "");
+    } else {
+        unreachable!("Failed to parse");
+    }
 }
