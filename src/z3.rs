@@ -94,6 +94,22 @@ pub fn tail(e: Z3Exp) -> Z3Exp {
     Z3Exp::Tail(Box::new(e))
 }
 
+pub fn first(e: Z3Exp) -> Z3Exp {
+    head(e)
+}
+
+pub fn second(e: Z3Exp) -> Z3Exp {
+    head(tail(e))
+}
+
+pub fn third(e: Z3Exp) -> Z3Exp {
+    head(tail(tail(e)))
+}
+
+pub fn forth(e: Z3Exp) -> Z3Exp {
+    head(tail(tail(tail(e))))
+}
+
 pub fn plus(e1: Z3Exp, e2: Z3Exp) -> Z3Exp {
     Z3Exp::Plus(Box::new(e1), Box::new(e2))
 }
