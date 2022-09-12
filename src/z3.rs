@@ -383,6 +383,10 @@ fn test_parse_expr() {
         parse_expr("(insert   1    nil)"),
         Ok(("", insert(int(1), Z3Exp::Nil)))
     );
+    assert_eq!(
+        parse_expr("(-   123456)"),
+        Ok(("", int(-123456)))
+    );
 
     assert_eq!(parse_expr("(define-fun squeezenet0_conv8_weight_shape () (List Int) (insert 128 (insert 32 (insert 1 (insert 1 nil)))))"), Ok(("", Z3Exp::DefineFun(String::from("squeezenet0_conv8_weight_shape"), Box::new(Z3Type::Void), Box::new(Z3Type::List(Box::new(Z3Type::Int))), Box::new(insert(int(128), insert(int(32), insert(int(1), insert(int(1), Z3Exp::Nil)))))))));
 }
