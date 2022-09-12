@@ -217,17 +217,33 @@ fn parse_div<'a>(i: &'a str) -> IResult<&'a str, Z3Exp, VerboseError<&'a str>> {
 }
 
 fn parse_sub<'a>(i: &'a str) -> IResult<&'a str, Z3Exp, VerboseError<&'a str>> {
-    delimited(
-        char('('),
-        map(
-            preceded(
-                terminated(tag("-"), multispace0),
-                tuple((parse_expr, parse_expr)),
+    alt((
+        delimited(
+            char('('),
+            map(
+                preceded(
+                    terminated(tag("-"), multispace0),
+                    tuple((parse_expr, parse_expr)),
+                ),
+                |(e1, e2)| sub(e1, e2),
             ),
-            |(e1, e2)| sub(e1, e2),
+            context("closing paren", cut(preceded(multispace0, char(')')))),
         ),
-        context("closing paren", cut(preceded(multispace0, char(')')))),
-    )(i)
+        delimited(
+            char('('),
+            map(
+                preceded(
+                    terminated(tag("-"), multispace0),
+                    parse_num,
+                ),
+                |e1| match e1 {
+                    Z3Exp::Int(i) => Z3Exp::Int(-i),
+                    _ => unreachable!(""),
+                },
+            ),
+            context("closing paren", cut(preceded(multispace0, char(')')))),
+        ),
+    ))(i)
 }
 
 fn parse_equal<'a>(i: &'a str) -> IResult<&'a str, Z3Exp, VerboseError<&'a str>> {
@@ -437,11 +453,13 @@ fn test_parse_z3_result() {
     (insert 128 (insert 32 (insert 1 nil))))
   (define-fun squeezenet0_dropout0_fwd_shape () (List Int)
     (insert 1 (insert 512 (insert 13 (insert 13 nil)))))
+  (define-fun squeezenet0_dropout0_fwd_shape () (List Int)
+    nil)
 )"##;
     let result = parse_z3_result(input);
     if let Ok((remainder, parsed)) = result {
         assert_eq!(parsed.is_sat, true);
-        assert_eq!(parsed.shapes.len(), 2);
+        assert_eq!(parsed.shapes.len(), 3);
         assert_eq!(remainder, "");
     } else {
         unreachable!("Failed to parse");

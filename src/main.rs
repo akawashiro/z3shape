@@ -52,6 +52,15 @@ fn gen_constraints(model: &onnx::ModelProto) -> (HashSet<Z3Exp>, Vec<Z3Exp>) {
         }
     }
 
+    fn get_attribute<'a>(node: &'a onnx::NodeProto, att: &str) -> Option<&'a onnx::AttributeProto>{
+        for a in node.attribute.iter(){
+            if a.name == Some(att.to_string()) {
+                return Some(a)
+            }
+        }
+        None
+    }
+
     for node in model.graph.node.iter() {
         if let Some(op_type) = &node.op_type {
             if op_type == "Reshape" {
@@ -59,22 +68,49 @@ fn gen_constraints(model: &onnx::ModelProto) -> (HashSet<Z3Exp>, Vec<Z3Exp>) {
             }else if op_type == "Shape" {
                 // TODO (akawashiro): We need len(list) in Z3.
             }else if op_type == "Constant" || op_type == "Gather" || op_type == "Unsqueeze" {
+            }else if op_type == "Gemm" {
+                assert!(node.input.len() == 2 || node.input.len() == 3);
+                assert_eq!(node.output.len(), 1);
+
+                let trans_a = get_attribute(node, "transA").map_or(0, |a| a.i.map_or(0, |x| x));
+                let trans_b = get_attribute(node, "transB").map_or(0, |a| a.i.map_or(0, |x| x));
+
+                let mat_a = Z3Exp::Variable(shape_name(&node.input[0]));
+                let mat_b = Z3Exp::Variable(shape_name(&node.input[1]));
+                let mat_y = Z3Exp::Variable(shape_name(&node.output[0]));
+                decares.insert(dims_dec(shape_name(&node.input[0])));
+                decares.insert(dims_dec(shape_name(&node.input[1])));
+                decares.insert(dims_dec(shape_name(&node.output[0])));
+
+                let mut dim_m_a = first(mat_a.clone());
+                let mut dim_k_a = second(mat_a);
+                if trans_a == 1 {
+                    std::mem::swap(&mut dim_m_a, &mut dim_k_a);
+                }
+                let mut dim_n_b = first(mat_b.clone());
+                let mut dim_k_b = second(mat_b);
+                if trans_b == 1 {
+                    std::mem::swap(&mut dim_n_b, &mut dim_k_b);
+                }
+                let dim_m_y = first(mat_y.clone());
+                let dim_n_y = second(mat_y);
+
+                conditions.push(ass_eq(dim_m_a, dim_m_y));
+                conditions.push(ass_eq(dim_k_a, dim_k_b));
+                conditions.push(ass_eq(dim_n_b, dim_n_y));
             }else if op_type == "MaxPool" || op_type == "AveragePool" {
                 assert_eq!(node.input.len(), 1);
                 assert_eq!(node.output.len(), 1);
 
-                let kernel_shape_att = &node.attribute[0];
-                assert_eq!(kernel_shape_att.name, Some(String::from("kernel_shape")));
+                let kernel_shape_att = get_attribute(node, "kernel_shape").unwrap();
                 let kernel_shape = &kernel_shape_att.ints;
                 assert_eq!(kernel_shape.len(), 2);
 
-                let pads_att = &node.attribute[1];
-                assert_eq!(pads_att.name, Some(String::from("pads")));
+                let pads_att = get_attribute(node, "pads").unwrap();
                 let pads = &pads_att.ints;
                 assert_eq!(pads.len(), 4);
 
-                let strides_att = &node.attribute[2];
-                assert_eq!(strides_att.name, Some(String::from("strides")));
+                let strides_att = get_attribute(node, "strides").unwrap();
                 let strides = &strides_att.ints;
                 assert_eq!(strides.len(), 2);
 
@@ -201,10 +237,10 @@ fn gen_constraints(model: &onnx::ModelProto) -> (HashSet<Z3Exp>, Vec<Z3Exp>) {
                 let o = shape_name(&node.output[0]);
                 decares.insert(dims_dec(i.clone()));
                 decares.insert(dims_dec(o.clone()));
-                conditions.push(ass_eq(first(Z3Exp::Variable(i.clone())), first(Z3Exp::Variable(o.clone()))));
-                conditions.push(ass_eq(second(Z3Exp::Variable(i.clone())), second(Z3Exp::Variable(o))));
-                conditions.push(ass_eq(third(Z3Exp::Variable(i.clone())), third(int(1))));
-                conditions.push(ass_eq(forth(Z3Exp::Variable(i)), forth(int(1))));
+                // conditions.push(ass_eq(first(Z3Exp::Variable(i.clone())), first(Z3Exp::Variable(o.clone()))));
+                // conditions.push(ass_eq(second(Z3Exp::Variable(i.clone())), second(Z3Exp::Variable(o))));
+                // conditions.push(ass_eq(third(Z3Exp::Variable(i.clone())), int(1)));
+                // conditions.push(ass_eq(forth(Z3Exp::Variable(i)), int(1)));
             } else if op_type == "Relu" || op_type == "Dropout" || op_type == "Clip" {
                 assert_eq!(node.input.len(), 1);
                 assert_eq!(node.input.len(), node.output.len());
@@ -338,9 +374,11 @@ fn shape_infer(onnx_path: &Path) {
 
     let mut model = ModelProto::new();
     model.merge_from(&mut cis).expect("fail to merge");
+    println!("hoge");
 
     let (decares, conditions) = gen_constraints(&model);
 
+    println!("hoge");
     let smt_filename = onnx_path.to_str().unwrap().to_owned() + "_shape_inference.smtlib2";
     let mut smt_file = File::create(smt_filename.clone()).unwrap();
     let mut contents = String::from("");
@@ -360,12 +398,13 @@ fn shape_infer(onnx_path: &Path) {
         .output()
         .unwrap_or_else(|e| panic!("failed to execute process: {}", e));
 
+    dbg!(output.status.success());
     if output.status.success() {
         let result = String::from_utf8_lossy(&output.stdout);
         if let Ok((_, parsed)) = parse_z3_result(&result) {
             print_result(parsed);
         } else {
-            unreachable!("Failed to parse the result");
+            unreachable!("Failed to parse the result {:?}", parse_z3_result(&result));
         }
 
         let result_filename =
