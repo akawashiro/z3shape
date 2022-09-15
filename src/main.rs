@@ -23,6 +23,7 @@ fn gen_constraints(model: &onnx::ModelProto) -> (HashSet<Z3Exp>, Vec<Z3Exp>) {
     let mut conditions = Vec::new();
 
     for inout in model.graph.input.iter().chain(model.graph.output.iter()) {
+        // dbg!(&inout);
         let name = shape_name(inout.name.as_ref().unwrap());
         decares.insert(Z3Exp::DecareConst(
             name.clone(),
@@ -37,6 +38,11 @@ fn gen_constraints(model: &onnx::ModelProto) -> (HashSet<Z3Exp>, Vec<Z3Exp>) {
                     d.value.as_ref().unwrap()
                 {
                     shape.push(*i);
+                } else if let onnx::tensor_shape_proto::dimension::Value::DimParam(_) =
+                    d.value.as_ref().unwrap()
+                {
+                    // TODO: Symbolic value
+                    shape.push(0);
                 }
             }
         }
@@ -52,10 +58,30 @@ fn gen_constraints(model: &onnx::ModelProto) -> (HashSet<Z3Exp>, Vec<Z3Exp>) {
         }
     }
 
-    fn get_attribute<'a>(node: &'a onnx::NodeProto, att: &str) -> Option<&'a onnx::AttributeProto>{
-        for a in node.attribute.iter(){
+    for init in model.graph.initializer.iter() {
+        if let Some(name) = &init.name {
+            let name = shape_name(name);
+            decares.insert(Z3Exp::DecareConst(
+                name.clone(),
+                Z3Type::List(Box::new(Z3Type::Int)),
+            ));
+
+            let mut name_e = Z3Exp::Variable(name);
+            for s in init.dims.iter() {
+                let eq = Z3Exp::Assert(Box::new(Z3Exp::Equal(
+                    Box::new(Z3Exp::Head(Box::new(name_e.clone()))),
+                    Box::new(Z3Exp::Int(*s)),
+                )));
+                name_e = Z3Exp::Tail(Box::new(name_e));
+                conditions.push(eq);
+            }
+        }
+    }
+
+    fn get_attribute<'a>(node: &'a onnx::NodeProto, att: &str) -> Option<&'a onnx::AttributeProto> {
+        for a in node.attribute.iter() {
             if a.name == Some(att.to_string()) {
-                return Some(a)
+                return Some(a);
             }
         }
         None
@@ -65,10 +91,10 @@ fn gen_constraints(model: &onnx::ModelProto) -> (HashSet<Z3Exp>, Vec<Z3Exp>) {
         if let Some(op_type) = &node.op_type {
             if op_type == "Reshape" {
                 // TODO (akawashiro): We need constant propagation.
-            }else if op_type == "Shape" {
+            } else if op_type == "Shape" {
                 // TODO (akawashiro): We need len(list) in Z3.
-            }else if op_type == "Constant" || op_type == "Gather" || op_type == "Unsqueeze" {
-            }else if op_type == "Gemm" {
+            } else if op_type == "Constant" || op_type == "Gather" || op_type == "Unsqueeze" {
+            } else if op_type == "Gemm" {
                 assert!(node.input.len() == 2 || node.input.len() == 3);
                 assert_eq!(node.output.len(), 1);
 
@@ -98,7 +124,7 @@ fn gen_constraints(model: &onnx::ModelProto) -> (HashSet<Z3Exp>, Vec<Z3Exp>) {
                 conditions.push(ass_eq(dim_m_a, dim_m_y));
                 conditions.push(ass_eq(dim_k_a, dim_k_b));
                 conditions.push(ass_eq(dim_n_b, dim_n_y));
-            }else if op_type == "MaxPool" || op_type == "AveragePool" {
+            } else if op_type == "MaxPool" || op_type == "AveragePool" {
                 assert_eq!(node.input.len(), 1);
                 assert_eq!(node.output.len(), 1);
 
@@ -343,42 +369,16 @@ fn gen_constraints(model: &onnx::ModelProto) -> (HashSet<Z3Exp>, Vec<Z3Exp>) {
     (decares, conditions)
 }
 
-fn int_list_expr_to_vec(e: Z3Exp) -> Vec<i64> {
-    match e {
-        Z3Exp::Insert(e1, e2) => {
-            if let Z3Exp::Int(i) = *e1 {
-                let mut v = int_list_expr_to_vec(*e2);
-                v.insert(0, i);
-                v
-            } else {
-                unreachable!("int_list_expr_to_vec finds non integer elements in the list")
-            }
-        }
-        Z3Exp::Nil => Vec::new(),
-        _ => unreachable!("int_list_expr_to_vec takes non list input {:}", e),
-    }
-}
-
-fn print_result(result: Z3Result) -> () {
-    for s in result.shapes.iter() {
-        if let Z3Exp::DefineFun(name, _, _, e) = s {
-            println!("{:}: {:?}", name, int_list_expr_to_vec(*(*e).clone()));
-        }
-    }
-}
-
-fn shape_infer(onnx_path: &Path) {
+fn shape_infer(onnx_path: &Path) -> Option<Z3Result> {
     let file = File::open(onnx_path).expect("fail to open file");
     let mut buffered_reader = BufReader::new(file);
     let mut cis = CodedInputStream::from_buf_read(&mut buffered_reader);
 
     let mut model = ModelProto::new();
     model.merge_from(&mut cis).expect("fail to merge");
-    println!("hoge");
 
     let (decares, conditions) = gen_constraints(&model);
 
-    println!("hoge");
     let smt_filename = onnx_path.to_str().unwrap().to_owned() + "_shape_inference.smtlib2";
     let mut smt_file = File::create(smt_filename.clone()).unwrap();
     let mut contents = String::from("");
@@ -398,35 +398,39 @@ fn shape_infer(onnx_path: &Path) {
         .output()
         .unwrap_or_else(|e| panic!("failed to execute process: {}", e));
 
-    dbg!(output.status.success());
     if output.status.success() {
         let result = String::from_utf8_lossy(&output.stdout);
         if let Ok((_, parsed)) = parse_z3_result(&result) {
-            print_result(parsed);
-        } else {
-            unreachable!("Failed to parse the result {:?}", parse_z3_result(&result));
-        }
+            for (k, v) in parsed.shapes.iter() {
+                println!("{:}: {:?}", k, v);
+            }
+            let result_filename =
+                onnx_path.to_str().unwrap().to_owned() + "_shape_inference_result.smtlib2";
+            let mut result_file = File::create(&result_filename).unwrap();
+            result_file.write_all(result.as_bytes()).unwrap();
+            println!("Check: {:}", result_filename);
 
-        let result_filename =
-            onnx_path.to_str().unwrap().to_owned() + "_shape_inference_result.smtlib2";
-        let mut result_file = File::create(&result_filename).unwrap();
-        result_file.write_all(result.as_bytes()).unwrap();
-        println!("Check: {:}", result_filename);
+            Some(parsed)
+        } else {
+            println!("Failed to parse the result {:?}", parse_z3_result(&result));
+            None
+        }
     } else {
         let s = String::from_utf8_lossy(&output.stderr);
         print!("{}", s);
+        None
     }
 }
 
 #[test]
 fn e2e_test() {
     let mut testcases = Vec::new();
-    testcases.push((Path::new("squeezenet1.1-7.onnx"), "https://github.com/onnx/models/raw/main/vision/classification/squeezenet/model/squeezenet1.1-7.onnx"));
-    testcases.push((Path::new("mobilenetv2-7.onnx"), "https://github.com/onnx/models/raw/main/vision/classification/mobilenet/model/mobilenetv2-7.onnx"));
+    testcases.push((Path::new("squeezenet1.1-7.onnx"), "https://github.com/onnx/models/raw/main/vision/classification/squeezenet/model/squeezenet1.1-7.onnx", vec![("shape_squeezenet0_conv25_fwd", vec![1, 1000, 13, 13])]));
+    testcases.push((Path::new("mobilenetv2-7.onnx"), "https://github.com/onnx/models/raw/main/vision/classification/mobilenet/model/mobilenetv2-7.onnx", vec![("shape_474", vec![0,32,112,112]), ("shape_317", vec![0,32,112,112])]));
     // TODO
     // testcases.push((Path::new("tinyyolov2-7.onnx"), "https://github.com/onnx/models/raw/main/vision/object_detection_segmentation/tiny-yolov2/model/tinyyolov2-7.onnx"));
     // testcases.push((Path::new("bidaf-9.onnx"), "https://github.com/onnx/models/raw/main/text/machine_comprehension/bidirectional_attention_flow/model/bidaf-9.onnx"));
-    for (file, url) in testcases.iter() {
+    for (file, url, anss) in testcases.iter() {
         if !file.exists() {
             println!("Download {} from github", file.to_string_lossy());
             let responce = reqwest::blocking::get(*url)
@@ -436,7 +440,12 @@ fn e2e_test() {
             out.write_all(&contents)
                 .expect("Failed to write contents to the file");
         }
-        shape_infer(file);
+        if let Some(result) = shape_infer(file) {
+            for (k, v) in anss.iter() {
+                assert_eq!(Some(v), result.shapes.get(&String::from(*k)));
+            }
+        } else {
+        }
     }
 }
 

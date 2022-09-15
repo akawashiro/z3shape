@@ -8,6 +8,7 @@ use nom::{
     sequence::{delimited, pair, preceded, terminated, tuple},
     IResult,
 };
+use std::collections::HashMap;
 use std::fmt;
 
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
@@ -47,10 +48,10 @@ pub enum Z3Exp {
     DefineFun(String, Box<Z3Type>, Box<Z3Type>, Box<Z3Exp>),
 }
 
-#[derive(PartialEq, Eq, Hash, Clone, Debug)]
+#[derive(PartialEq, Eq, Clone, Debug)]
 pub struct Z3Result {
     is_sat: bool,
-    pub shapes: Vec<Z3Exp>,
+    pub shapes: HashMap<String, Vec<i64>>,
 }
 
 impl fmt::Display for Z3Exp {
@@ -149,7 +150,10 @@ fn parse_num<'a>(i: &'a str) -> IResult<&'a str, Z3Exp, VerboseError<&'a str>> {
 }
 
 fn identifier<'a>(input: &'a str) -> IResult<&str, &str, VerboseError<&'a str>> {
-    recognize(pair(alpha1, many0_count(alt((alphanumeric1, tag("_"))))))(input)
+    recognize(pair(
+        alpha1,
+        many0_count(alt((alphanumeric1, tag("_"), tag(".")))),
+    ))(input)
 }
 
 fn parse_variable<'a>(i: &'a str) -> IResult<&'a str, Z3Exp, VerboseError<&'a str>> {
@@ -232,10 +236,7 @@ fn parse_sub<'a>(i: &'a str) -> IResult<&'a str, Z3Exp, VerboseError<&'a str>> {
         delimited(
             char('('),
             map(
-                preceded(
-                    terminated(tag("-"), multispace0),
-                    parse_num,
-                ),
+                preceded(terminated(tag("-"), multispace0), parse_num),
                 |e1| match e1 {
                     Z3Exp::Int(i) => Z3Exp::Int(-i),
                     _ => unreachable!(""),
@@ -383,10 +384,7 @@ fn test_parse_expr() {
         parse_expr("(insert   1    nil)"),
         Ok(("", insert(int(1), Z3Exp::Nil)))
     );
-    assert_eq!(
-        parse_expr("(-   123456)"),
-        Ok(("", int(-123456)))
-    );
+    assert_eq!(parse_expr("(-   123456)"), Ok(("", int(-123456))));
 
     assert_eq!(parse_expr("(define-fun squeezenet0_conv8_weight_shape () (List Int) (insert 128 (insert 32 (insert 1 (insert 1 nil)))))"), Ok(("", Z3Exp::DefineFun(String::from("squeezenet0_conv8_weight_shape"), Box::new(Z3Type::Void), Box::new(Z3Type::List(Box::new(Z3Type::Int))), Box::new(insert(int(128), insert(int(32), insert(int(1), insert(int(1), Z3Exp::Nil)))))))));
 }
@@ -429,19 +427,48 @@ fn test_parse_type() {
     );
 }
 
+fn int_list_expr_to_vec(e: Z3Exp) -> Vec<i64> {
+    match e {
+        Z3Exp::Insert(e1, e2) => {
+            if let Z3Exp::Int(i) = *e1 {
+                let mut v = int_list_expr_to_vec(*e2);
+                v.insert(0, i);
+                v
+            } else {
+                unreachable!("int_list_expr_to_vec finds non integer elements in the list")
+            }
+        }
+        Z3Exp::Nil => Vec::new(),
+        _ => unreachable!("int_list_expr_to_vec takes non list input {:}", e),
+    }
+}
+
+fn decompose_shape_fun(f: &Z3Exp) -> (String, Vec<i64>) {
+    if let Z3Exp::DefineFun(name, _, _, e) = f {
+        (name.to_string(), int_list_expr_to_vec((**e).clone()))
+    } else {
+        unreachable!("decompose_shape_fun");
+    }
+}
+
 pub fn parse_z3_result<'a>(i: &'a str) -> IResult<&'a str, Z3Result, VerboseError<&'a str>> {
     preceded(
         terminated(tag("sat"), multispace0),
         delimited(
             char('('),
             map(
-                fold_many0(parse_expr, Vec::new, |mut acc: Vec<Z3Exp>, item| {
-                    acc.push(item);
-                    acc
-                }),
-                |ds| Z3Result {
+                fold_many0(
+                    preceded(multispace0, parse_define_fun),
+                    HashMap::new,
+                    |mut acc: HashMap<String, Vec<i64>>, fun| {
+                        let (k, v) = decompose_shape_fun(&fun);
+                        acc.insert(k, v);
+                        acc
+                    },
+                ),
+                |ss| Z3Result {
                     is_sat: true,
-                    shapes: ds,
+                    shapes: ss,
                 },
             ),
             context("closing paren", cut(preceded(multispace0, char(')')))),
@@ -456,14 +483,13 @@ fn test_parse_z3_result() {
   (define-fun squeezenet0_conv8_weight_shape () (List Int)
     (insert 128 (insert 32 (insert 1 nil))))
   (define-fun squeezenet0_dropout0_fwd_shape () (List Int)
-    (insert 1 (insert 512 (insert 13 (insert 13 nil)))))
-  (define-fun squeezenet0_dropout0_fwd_shape () (List Int)
     nil)
 )"##;
     let result = parse_z3_result(input);
     if let Ok((remainder, parsed)) = result {
         assert_eq!(parsed.is_sat, true);
-        assert_eq!(parsed.shapes.len(), 3);
+        println!("{:?}", parsed);
+        assert_eq!(parsed.shapes.len(), 2);
         assert_eq!(remainder, "");
     } else {
         unreachable!("Failed to parse");
