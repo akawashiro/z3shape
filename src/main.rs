@@ -89,7 +89,7 @@ fn gen_constraints(model: &onnx::ModelProto) -> (HashSet<Z3Exp>, Vec<Z3Exp>) {
 
     for node in model.graph.node.iter() {
         if let Some(op_type) = &node.op_type {
-            if node.name == Some(String::from("Conv_2")) {
+            if node.name == Some(String::from("Gather_100")) {
                 break;
             }
 
@@ -191,8 +191,7 @@ fn gen_constraints(model: &onnx::ModelProto) -> (HashSet<Z3Exp>, Vec<Z3Exp>) {
                 assert_eq!(node.input.len(), 3);
                 assert_eq!(node.output.len(), 1);
 
-                let dilations_att = &node.attribute[0];
-                assert_eq!(dilations_att.name, Some(String::from("dilations")));
+                let dilations_att = get_attribute(node, "dilations").unwrap();
                 let dilations = &dilations_att.ints;
                 assert_eq!(dilations.len(), 2);
 
@@ -236,11 +235,8 @@ fn gen_constraints(model: &onnx::ModelProto) -> (HashSet<Z3Exp>, Vec<Z3Exp>) {
                 );
                 conditions.push(in_ch_eq);
 
-                let out_ch_eq1 = ass_eq(
-                    mul(int(group), head(weight.clone())),
-                    head(tail(out_image.clone())),
-                );
-                let out_ch_eq2 = ass_eq(mul(int(group), head(weight)), head(bias));
+                let out_ch_eq1 = ass_eq(head(weight.clone()), head(tail(out_image.clone())));
+                let out_ch_eq2 = ass_eq(head(weight), head(bias));
                 conditions.push(out_ch_eq1);
                 conditions.push(out_ch_eq2);
 
@@ -403,7 +399,9 @@ fn shape_infer(onnx_path: &Path) -> Option<Z3Result> {
         .unwrap_or_else(|e| panic!("failed to execute process: {}", e));
 
     let result = String::from_utf8_lossy(&output.stdout);
-    if let Ok((_, parsed)) = parse_z3_result(&result) {
+    if let Ok((remain, parsed)) = parse_z3_result(&result) {
+        assert_eq!(remain, "");
+
         for (k, v) in parsed.shapes.iter() {
             println!("{:}: {:?}", k, v);
         }
@@ -420,29 +418,60 @@ fn shape_infer(onnx_path: &Path) -> Option<Z3Result> {
     }
 }
 
+struct Testcase<'a> {
+    file: &'a Path,
+    url: &'a str,
+    ass: Vec<(&'a str, Vec<i64>)>,
+}
+
+fn shape_partial_eq(s1: &Vec<i64>, s2: &Vec<i64>) -> bool {
+    for (d1, d2) in s1.iter().zip(s2.iter()) {
+        if d1 != d2 {
+            return false
+        }
+    }
+    true
+}
+
 #[test]
 fn e2e_test() {
     let mut testcases = Vec::new();
-    // testcases.push((Path::new("squeezenet1.1-7.onnx"), "https://github.com/onnx/models/raw/main/vision/classification/squeezenet/model/squeezenet1.1-7.onnx", vec![("shape_squeezenet0_conv25_fwd", vec![1, 1000, 13, 13])]));
-    testcases.push((Path::new("mobilenetv2-7.onnx"), "https://github.com/onnx/models/raw/main/vision/classification/mobilenet/model/mobilenetv2-7.onnx", vec![("shape_477", vec![0,32,112,112]), ("shape_474", vec![0,32,112,112]), ("shape_317", vec![0,32,112,112])]));
-    // TODO
-    // testcases.push((Path::new("tinyyolov2-7.onnx"), "https://github.com/onnx/models/raw/main/vision/object_detection_segmentation/tiny-yolov2/model/tinyyolov2-7.onnx"));
-    // testcases.push((Path::new("bidaf-9.onnx"), "https://github.com/onnx/models/raw/main/text/machine_comprehension/bidirectional_attention_flow/model/bidaf-9.onnx"));
-    for (file, url, anss) in testcases.iter() {
-        if !file.exists() {
-            println!("Download {} from github", file.to_string_lossy());
-            let responce = reqwest::blocking::get(*url)
-                .expect(&(String::from("Failed to download from ") + url));
+    testcases.push(Testcase{
+        file: Path::new("squeezenet1.1-7.onnx"),
+        url: "https://github.com/onnx/models/raw/main/vision/classification/squeezenet/model/squeezenet1.1-7.onnx", 
+        ass:vec![
+            ("shape_squeezenet0_conv24_fwd", vec![1, 256, 13, 13]),
+            ("shape_squeezenet0_relu24_fwd", vec![1, 256, 13, 13]),
+            ("shape_squeezenet0_concat7", vec![1, 512, 13, 13]),
+            ("shape_squeezenet0_dropout0_fwd", vec![1, 512, 13, 13]),
+            ("shape_squeezenet0_conv25_fwd", vec![1, 1000, 13, 13]), 
+        ]});
+    testcases.push(Testcase{
+        file: Path::new("mobilenetv2-7.onnx"),
+        url: "https://github.com/onnx/models/raw/main/vision/classification/mobilenet/model/mobilenetv2-7.onnx",
+        ass:vec![
+            ("shape_477", vec![0,32,112,112]),
+            ("shape_474", vec![0,32,112,112]),
+            ("shape_317", vec![0,32,112,112])
+        ]});
+
+    for t in testcases.iter() {
+        if !t.file.exists() {
+            println!("Download {} from github", t.file.to_string_lossy());
+            let responce = reqwest::blocking::get(&*t.url)
+                .expect(&(String::from("Failed to download from ") + t.url));
             let contents = responce.bytes().expect("No contents in response");
-            let mut out = File::create(file).expect("failed to create file");
+            let mut out = File::create(t.file).expect("failed to create file");
             out.write_all(&contents)
                 .expect("Failed to write contents to the file");
         }
-        if let Some(result) = shape_infer(file) {
-            for (k, v) in anss.iter() {
-                assert_eq!(Some(v), result.shapes.get(&String::from(*k)));
+        if let Some(result) = shape_infer(t.file) {
+            for (k, s1) in t.ass.iter() {
+                let s2 = result.shapes.get(&String::from(*k)).expect(k);
+                assert_eq!(s1, s2, "{:}", k);
             }
         } else {
+            unreachable!();
         }
     }
 }

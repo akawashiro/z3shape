@@ -471,7 +471,7 @@ pub fn parse_z3_result<'a>(i: &'a str) -> IResult<&'a str, Z3Result, VerboseErro
                     shapes: ss,
                 },
             ),
-            context("closing paren", cut(preceded(multispace0, char(')')))),
+            context("closing paren", cut(preceded(multispace0, terminated(char(')'), multispace0)))),
         ),
     )(i)
 }
