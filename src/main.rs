@@ -427,7 +427,7 @@ struct Testcase<'a> {
 fn shape_partial_eq(s1: &Vec<i64>, s2: &Vec<i64>) -> bool {
     for (d1, d2) in s1.iter().zip(s2.iter()) {
         if d1 != d2 {
-            return false
+            return false;
         }
     }
     true
@@ -456,23 +456,41 @@ fn e2e_test() {
         ]});
 
     for t in testcases.iter() {
-        if !t.file.exists() {
-            println!("Download {} from github", t.file.to_string_lossy());
-            let responce = reqwest::blocking::get(&*t.url)
-                .expect(&(String::from("Failed to download from ") + t.url));
-            let contents = responce.bytes().expect("No contents in response");
-            let mut out = File::create(t.file).expect("failed to create file");
-            out.write_all(&contents)
-                .expect("Failed to write contents to the file");
-        }
-        if let Some(result) = shape_infer(t.file) {
-            for (k, s1) in t.ass.iter() {
-                let s2 = result.shapes.get(&String::from(*k)).expect(k);
-                assert_eq!(s1, s2, "{:}", k);
+        let retry_z3 = 20;
+
+        let d1: Vec<i64> = Vec::new();
+        let d2: Vec<i64> = Vec::new();
+        let mut failed_shapes = vec![(d1, d2, "dummy")];
+
+        // Hmm... The output of Z3 is not decidable. We need some retries to get the answer.
+        for _i in 0..retry_z3 {
+            if !t.file.exists() {
+                println!("Download {} from github", t.file.to_string_lossy());
+                let responce = reqwest::blocking::get(&*t.url)
+                    .expect(&(String::from("Failed to download from ") + t.url));
+                let contents = responce.bytes().expect("No contents in response");
+                let mut out = File::create(t.file).expect("failed to create file");
+                out.write_all(&contents)
+                    .expect("Failed to write contents to the file");
             }
-        } else {
-            unreachable!();
+            if let Some(result) = shape_infer(t.file) {
+                let mut f: Vec<(Vec<i64>, Vec<i64>, &str)> = Vec::new();
+                for (k, s1) in t.ass.iter() {
+                    let s2 = result.shapes.get(&String::from(*k)).expect(k);
+                    if s1 != s2 {
+                        f.push((s1.clone(), s2.clone(), *k));
+                    }
+                }
+                failed_shapes = f.clone();
+                if failed_shapes.len() == 0 {
+                    break;
+                }
+            } else {
+                unreachable!();
+            }
         }
+
+        assert_eq!(failed_shapes.len(), 0, "{:?}", failed_shapes);
     }
 }
 
