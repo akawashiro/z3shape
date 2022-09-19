@@ -93,10 +93,11 @@ fn gen_constraints(model: &onnx::ModelProto) -> (HashSet<Z3Exp>, Vec<Z3Exp>) {
                 break;
             }
 
-            if op_type == "Reshape" {
+            if op_type == "Reshape" || op_type == "Slice" {
                 // TODO (akawashiro): We need constant propagation.
             } else if op_type == "Shape" {
                 // TODO (akawashiro): We need len(list) in Z3.
+            } else if op_type == "Resize" {
             } else if op_type == "Constant" || op_type == "Gather" || op_type == "Unsqueeze" {
             } else if op_type == "Gemm" {
                 assert!(node.input.len() == 2 || node.input.len() == 3);
@@ -136,8 +137,8 @@ fn gen_constraints(model: &onnx::ModelProto) -> (HashSet<Z3Exp>, Vec<Z3Exp>) {
                 let kernel_shape = &kernel_shape_att.ints;
                 assert_eq!(kernel_shape.len(), 2);
 
-                let pads_att = get_attribute(node, "pads").unwrap();
-                let pads = &pads_att.ints;
+                let default_pads = vec![0, 0, 0, 0];
+                let pads = get_attribute(node, "pads").map_or(&default_pads, |a| &a.ints);
                 assert_eq!(pads.len(), 4);
 
                 let strides_att = get_attribute(node, "strides").unwrap();
@@ -202,8 +203,8 @@ fn gen_constraints(model: &onnx::ModelProto) -> (HashSet<Z3Exp>, Vec<Z3Exp>) {
                 let kernel_shape = &kernel_shape_att.ints;
                 assert_eq!(kernel_shape.len(), 2);
 
-                let pads_att = get_attribute(node, "pads").unwrap();
-                let pads = &pads_att.ints;
+                let default_pads = vec![0, 0, 0, 0];
+                let pads = get_attribute(node, "pads").map_or(&default_pads, |a| &a.ints);
                 assert_eq!(pads.len(), 4);
 
                 let strides_att = get_attribute(node, "strides").unwrap();
@@ -264,7 +265,12 @@ fn gen_constraints(model: &onnx::ModelProto) -> (HashSet<Z3Exp>, Vec<Z3Exp>) {
                 // conditions.push(ass_eq(second(Z3Exp::Variable(i.clone())), second(Z3Exp::Variable(o))));
                 // conditions.push(ass_eq(third(Z3Exp::Variable(i.clone())), int(1)));
                 // conditions.push(ass_eq(forth(Z3Exp::Variable(i)), int(1)));
-            } else if op_type == "Relu" || op_type == "Dropout" || op_type == "Clip" {
+            } else if op_type == "Relu"
+                || op_type == "Dropout"
+                || op_type == "Clip"
+                || op_type == "LeakyRelu"
+                || op_type == "Cast"
+            {
                 assert_eq!(node.input.len(), 1);
                 assert_eq!(node.input.len(), node.output.len());
 
@@ -276,7 +282,7 @@ fn gen_constraints(model: &onnx::ModelProto) -> (HashSet<Z3Exp>, Vec<Z3Exp>) {
                     Box::new(Z3Exp::Variable(i)),
                     Box::new(Z3Exp::Variable(o)),
                 ))));
-            } else if op_type == "Add" {
+            } else if op_type == "Add" || op_type == "Mul" || op_type == "Div" {
                 assert_eq!(node.input.len(), 2);
                 assert_eq!(node.output.len(), 1);
 
@@ -465,6 +471,16 @@ fn shape_partial_eq(s1: &Vec<i64>, s2: &Vec<i64>) -> bool {
 #[test]
 fn e2e_test() {
     let mut testcases = Vec::new();
+    testcases.push(Testcase{
+        file: Path::new("MaskRCNN-10.onnx"),
+        url: "https://github.com/onnx/models/raw/main/vision/object_detection_segmentation/mask-rcnn/model/MaskRCNN-10.onnx",
+        ass:vec![]
+    });
+    testcases.push(Testcase{
+        file: Path::new("tinyyolov2-7.onnx"),
+        url: "https://github.com/onnx/models/raw/main/vision/object_detection_segmentation/tiny-yolov2/model/tinyyolov2-7.onnx",
+        ass:vec![]
+    });
     testcases.push(Testcase{
         file: Path::new("resnet50-v1-7.onnx"),
         url: "https://github.com/onnx/models/raw/main/vision/classification/resnet/model/resnet50-v1-7.onnx",
