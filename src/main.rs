@@ -302,67 +302,46 @@ fn gen_constraints(model: &onnx::ModelProto) -> (HashSet<Z3Exp>, Vec<Z3Exp>) {
                     Box::new(Z3Exp::Variable(o)),
                 ))));
             } else if op_type == "Concat" {
-                assert_eq!(node.input.len(), 2);
+                assert!(1 <= node.input.len(), "{:?}", node);
                 assert_eq!(node.output.len(), 1);
                 assert_eq!(node.attribute.len(), 1);
-                let att = &node.attribute[0];
-                assert_eq!(att.name, Some(String::from("axis")));
-                let axis = att.i.unwrap();
+                let axis = get_attribute(node, "axis").unwrap().i.unwrap();
 
-                let i1 = shape_name(&node.input[0]);
-                let i2 = shape_name(&node.input[1]);
+                let mut inputs = Vec::new();
+                let mut in_exps = Vec::new();
+                for i in node.input.iter() {
+                    inputs.push(shape_name(i));
+                    decares.insert(dims_dec(shape_name(i)));
+                    in_exps.push(Z3Exp::Variable(shape_name(i)));
+                }
+
                 let o = shape_name(&node.output[0]);
-                decares.insert(Z3Exp::DecareConst(
-                    i1.clone(),
-                    Z3Type::List(Box::new(Z3Type::Int)),
-                ));
-                decares.insert(Z3Exp::DecareConst(
-                    i2.clone(),
-                    Z3Type::List(Box::new(Z3Type::Int)),
-                ));
                 decares.insert(Z3Exp::DecareConst(
                     o.clone(),
                     Z3Type::List(Box::new(Z3Type::Int)),
                 ));
-
-                let mut i1exp = Z3Exp::Variable(i1);
-                let mut i2exp = Z3Exp::Variable(i2);
                 let mut oexp = Z3Exp::Variable(o);
+
                 for _i in 0..axis {
-                    let i1h = Z3Exp::Head(Box::new(i1exp.clone()));
-                    let i2h = Z3Exp::Head(Box::new(i2exp.clone()));
-                    let oh = Z3Exp::Head(Box::new(oexp.clone()));
+                    let oh = first(oexp.clone());
+                    for i in 0..in_exps.len() {
+                        let h = first(in_exps[i].clone());
+                        conditions.push(ass_eq(oh, h));
+                        in_exps[i] = tail(in_exps[i]);
+                    }
 
-                    let eq1 =
-                        Z3Exp::Assert(Box::new(Z3Exp::Equal(Box::new(i1h.clone()), Box::new(i2h))));
-                    let eq2 = Z3Exp::Assert(Box::new(Z3Exp::Equal(Box::new(i1h), Box::new(oh))));
-                    conditions.push(eq1);
-                    conditions.push(eq2);
-
-                    i1exp = Z3Exp::Tail(Box::new(i1exp));
-                    i2exp = Z3Exp::Tail(Box::new(i2exp));
-                    oexp = Z3Exp::Tail(Box::new(oexp));
+                    oexp = tail(oexp);
                 }
 
-                let eq_concat = Z3Exp::Assert(Box::new(Z3Exp::Equal(
-                    Box::new(Z3Exp::Head(Box::new(oexp.clone()))),
-                    Box::new(Z3Exp::Plus(
-                        Box::new(Z3Exp::Head(Box::new(i1exp.clone()))),
-                        Box::new(Z3Exp::Head(Box::new(i2exp.clone()))),
-                    )),
-                )));
-                conditions.push(eq_concat);
+                let mut in_concat = int(0);
+                for i in in_exps.iter() {
+                    in_concat = plus(in_concat, *i);
+                }
+                conditions.push(ass_eq(in_concat, head(oexp.clone())));
 
-                let eq_tail_i = Z3Exp::Assert(Box::new(Z3Exp::Equal(
-                    Box::new(Z3Exp::Tail(Box::new(i1exp.clone()))),
-                    Box::new(Z3Exp::Tail(Box::new(i2exp))),
-                )));
-                let eq_tail_o = Z3Exp::Assert(Box::new(Z3Exp::Equal(
-                    Box::new(Z3Exp::Tail(Box::new(i1exp))),
-                    Box::new(Z3Exp::Tail(Box::new(oexp))),
-                )));
-                conditions.push(eq_tail_i);
-                conditions.push(eq_tail_o);
+                for i in in_exps.iter() {
+                    conditions.push(ass_eq(tail(*i), tail(oexp)));
+                }
             } else if op_type == "BatchNormalization" {
                 assert_eq!(node.input.len(), 5);
                 assert_eq!(node.output.len(), 1);
