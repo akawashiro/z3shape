@@ -387,7 +387,8 @@ fn gen_constraints(model: &onnx::ModelProto) -> (HashSet<Z3Exp>, Vec<Z3Exp>) {
                 conditions.push(ass_eq(second(x_exp.clone()), first(b_exp)));
                 conditions.push(ass_eq(second(x_exp.clone()), first(mean_exp)));
                 conditions.push(ass_eq(second(x_exp), first(var_exp)));
-
+            } else if op_type == "Flatten" {
+                // TODO (akawashiro): We need fold(mul, shape).
             } else {
                 unreachable!("Unknown op {:?}", node);
             }
