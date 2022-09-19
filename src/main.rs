@@ -188,41 +188,34 @@ fn gen_constraints(model: &onnx::ModelProto) -> (HashSet<Z3Exp>, Vec<Z3Exp>) {
                     out_w,
                 ));
             } else if op_type == "Conv" {
-                assert_eq!(node.input.len(), 3);
-                assert_eq!(node.output.len(), 1);
+                assert!(node.input.len() == 2 || node.input.len() == 3, "{:?}", node);
+                assert_eq!(node.output.len(), 1, "{:?}", node);
 
                 let dilations_att = get_attribute(node, "dilations").unwrap();
                 let dilations = &dilations_att.ints;
                 assert_eq!(dilations.len(), 2);
 
-                let group_att = &node.attribute[1];
-                assert_eq!(group_att.name, Some(String::from("group")));
+                let group_att = get_attribute(node, "group").unwrap();
                 let group = group_att.i.unwrap();
-                // assert_eq!(group, 1);
 
-                let kernel_shape_att = &node.attribute[2];
-                assert_eq!(kernel_shape_att.name, Some(String::from("kernel_shape")));
+                let kernel_shape_att = get_attribute(node, "kernel_shape").unwrap();
                 let kernel_shape = &kernel_shape_att.ints;
                 assert_eq!(kernel_shape.len(), 2);
 
-                let pads_att = &node.attribute[3];
-                assert_eq!(pads_att.name, Some(String::from("pads")));
+                let pads_att = get_attribute(node, "pads").unwrap();
                 let pads = &pads_att.ints;
                 assert_eq!(pads.len(), 4);
 
-                let strides_att = &node.attribute[4];
-                assert_eq!(strides_att.name, Some(String::from("strides")));
+                let strides_att = get_attribute(node, "strides").unwrap();
                 let strides = &strides_att.ints;
                 assert_eq!(strides.len(), 2);
 
                 decares.insert(dims_dec(shape_name(&node.input[0])));
                 decares.insert(dims_dec(shape_name(&node.input[1])));
-                decares.insert(dims_dec(shape_name(&node.input[2])));
                 decares.insert(dims_dec(shape_name(&node.output[0])));
 
                 let in_image = Z3Exp::Variable(shape_name(&node.input[0]));
                 let weight = Z3Exp::Variable(shape_name(&node.input[1]));
-                let bias = Z3Exp::Variable(shape_name(&node.input[2]));
                 let out_image = Z3Exp::Variable(shape_name(&node.output[0]));
 
                 let in_batch = head(in_image.clone());
@@ -236,9 +229,13 @@ fn gen_constraints(model: &onnx::ModelProto) -> (HashSet<Z3Exp>, Vec<Z3Exp>) {
                 conditions.push(in_ch_eq);
 
                 let out_ch_eq1 = ass_eq(head(weight.clone()), head(tail(out_image.clone())));
-                let out_ch_eq2 = ass_eq(head(weight), head(bias));
                 conditions.push(out_ch_eq1);
-                conditions.push(out_ch_eq2);
+                if node.input.len() == 3 {
+                    decares.insert(dims_dec(shape_name(&node.input[2])));
+                    let bias = Z3Exp::Variable(shape_name(&node.input[2]));
+                    let out_ch_eq2 = ass_eq(head(weight), head(bias));
+                    conditions.push(out_ch_eq2);
+                }
 
                 let k_h = (kernel_shape[0] - 1) * dilations[0] + 1;
                 let k_w = (kernel_shape[1] - 1) * dilations[1] + 1;
@@ -436,6 +433,11 @@ fn shape_partial_eq(s1: &Vec<i64>, s2: &Vec<i64>) -> bool {
 #[test]
 fn e2e_test() {
     let mut testcases = Vec::new();
+    testcases.push(Testcase{
+        file: Path::new("resnet50-v1-7.onnx"),
+        url: "https://github.com/onnx/models/raw/main/vision/classification/resnet/model/resnet50-v1-7.onnx",
+        ass:vec![]
+    });
     testcases.push(Testcase{
         file: Path::new("squeezenet1.1-7.onnx"),
         url: "https://github.com/onnx/models/raw/main/vision/classification/squeezenet/model/squeezenet1.1-7.onnx", 
