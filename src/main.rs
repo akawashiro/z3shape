@@ -304,7 +304,7 @@ fn gen_constraints(model: &onnx::ModelProto) -> (HashSet<Z3Exp>, Vec<Z3Exp>) {
                 let axis = att.i.unwrap();
 
                 let i1 = shape_name(&node.input[0]);
-                let i2 = shape_name(&node.input[0]);
+                let i2 = shape_name(&node.input[1]);
                 let o = shape_name(&node.output[0]);
                 decares.insert(Z3Exp::DecareConst(
                     i1.clone(),
@@ -357,8 +357,39 @@ fn gen_constraints(model: &onnx::ModelProto) -> (HashSet<Z3Exp>, Vec<Z3Exp>) {
                 )));
                 conditions.push(eq_tail_i);
                 conditions.push(eq_tail_o);
+            } else if op_type == "BatchNormalization" {
+                assert_eq!(node.input.len(), 5);
+                assert_eq!(node.output.len(), 1);
+
+                let x = shape_name(&node.input[0]);
+                let scale = shape_name(&node.input[1]);
+                let b = shape_name(&node.input[2]);
+                let mean = shape_name(&node.input[3]);
+                let var = shape_name(&node.input[4]);
+                let o = shape_name(&node.output[0]);
+
+                decares.insert(dims_dec(x.clone()));
+                decares.insert(dims_dec(scale.clone()));
+                decares.insert(dims_dec(b.clone()));
+                decares.insert(dims_dec(mean.clone()));
+                decares.insert(dims_dec(var.clone()));
+                decares.insert(dims_dec(o.clone()));
+
+                let x_exp = Z3Exp::Variable(x);
+                let scale_exp = Z3Exp::Variable(scale);
+                let b_exp = Z3Exp::Variable(b);
+                let mean_exp = Z3Exp::Variable(mean);
+                let var_exp = Z3Exp::Variable(var);
+                let o_exp = Z3Exp::Variable(o);
+
+                conditions.push(ass_eq(x_exp.clone(), o_exp.clone()));
+                conditions.push(ass_eq(second(x_exp.clone()), first(scale_exp)));
+                conditions.push(ass_eq(second(x_exp.clone()), first(b_exp)));
+                conditions.push(ass_eq(second(x_exp.clone()), first(mean_exp)));
+                conditions.push(ass_eq(second(x_exp), first(var_exp)));
+
             } else {
-                unreachable!("Unknown op {:?}", op_type);
+                unreachable!("Unknown op {:?}", node);
             }
         }
     }
