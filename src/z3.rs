@@ -113,6 +113,14 @@ pub fn forth(e: Z3Exp) -> Z3Exp {
     head(tail(tail(tail(e))))
 }
 
+pub fn nth(i: i64, e: Z3Exp) -> Z3Exp {
+    if i == 0 {
+        e
+    } else {
+        nth(i - 1, tail(e))
+    }
+}
+
 pub fn plus(e1: Z3Exp, e2: Z3Exp) -> Z3Exp {
     Z3Exp::Plus(Box::new(e1), Box::new(e2))
 }
@@ -473,7 +481,10 @@ pub fn parse_z3_result<'a>(i: &'a str) -> IResult<&'a str, Z3Result, VerboseErro
                     shapes: ss,
                 },
             ),
-            context("closing paren", cut(preceded(multispace0, terminated(char(')'), multispace0)))),
+            context(
+                "closing paren",
+                cut(preceded(multispace0, terminated(char(')'), multispace0))),
+            ),
         ),
     )(i)
 }

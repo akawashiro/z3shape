@@ -266,6 +266,29 @@ fn append_concat(
     }
 }
 
+fn append_transpose(
+    node: &onnx::NodeProto,
+    decares: &mut HashSet<Z3Exp>,
+    conditions: &mut Vec<Z3Exp>,
+) {
+    assert_eq!(node.input.len(), 1, "{:?}", node);
+    assert_eq!(node.output.len(), 1, "{:?}", node);
+
+    let data = shape_name(&node.input[0]);
+    let transposed = shape_name(&node.output[0]);
+    let perm = &get_attribute(node, "perm").unwrap().ints;
+
+    decares.insert(dims_dec(data.clone()));
+    decares.insert(dims_dec(transposed.clone()));
+
+    let data_exp = Z3Exp::Variable(data);
+    let transposed_exp = Z3Exp::Variable(transposed);
+
+    for (i, p) in perm.iter().enumerate() {
+        conditions.push(ass_eq(nth(*p, data_exp.clone()), nth(i.try_into().unwrap(), transposed_exp.clone())));
+    }
+}
+
 fn gen_constraints(model: &onnx::ModelProto) -> (HashSet<Z3Exp>, Vec<Z3Exp>) {
     let mut decares = HashSet::new();
     let mut conditions = Vec::new();
@@ -354,6 +377,8 @@ fn gen_constraints(model: &onnx::ModelProto) -> (HashSet<Z3Exp>, Vec<Z3Exp>) {
                 append_bn(node, &mut decares, &mut conditions);
             } else if op_type == "Concat" {
                 append_concat(node, &mut decares, &mut conditions);
+            } else if op_type == "Transpose" {
+                append_transpose(node, &mut decares, &mut conditions);
             } else if op_type == "GlobalAveragePool" {
                 assert_eq!(node.input.len(), 1);
                 assert_eq!(node.input.len(), node.output.len());
@@ -476,21 +501,21 @@ fn shape_partial_eq(s1: &Vec<i64>, s2: &Vec<i64>) -> bool {
 #[test]
 fn e2e_test() {
     let mut testcases = Vec::new();
-    // testcases.push(Testcase{
-    //     file: Path::new("MaskRCNN-10.onnx"),
-    //     url: "https://github.com/onnx/models/raw/main/vision/object_detection_segmentation/mask-rcnn/model/MaskRCNN-10.onnx",
-    //     ass:vec![]
-    // });
-    // testcases.push(Testcase{
-    //     file: Path::new("tinyyolov2-7.onnx"),
-    //     url: "https://github.com/onnx/models/raw/main/vision/object_detection_segmentation/tiny-yolov2/model/tinyyolov2-7.onnx",
-    //     ass:vec![]
-    // });
-    // testcases.push(Testcase{
-    //     file: Path::new("resnet50-v1-7.onnx"),
-    //     url: "https://github.com/onnx/models/raw/main/vision/classification/resnet/model/resnet50-v1-7.onnx",
-    //     ass:vec![]
-    // });
+    testcases.push(Testcase{
+        file: Path::new("MaskRCNN-10.onnx"),
+        url: "https://github.com/onnx/models/raw/main/vision/object_detection_segmentation/mask-rcnn/model/MaskRCNN-10.onnx",
+        ass:vec![]
+    });
+    testcases.push(Testcase{
+        file: Path::new("tinyyolov2-7.onnx"),
+        url: "https://github.com/onnx/models/raw/main/vision/object_detection_segmentation/tiny-yolov2/model/tinyyolov2-7.onnx",
+        ass:vec![]
+    });
+    testcases.push(Testcase{
+        file: Path::new("resnet50-v1-7.onnx"),
+        url: "https://github.com/onnx/models/raw/main/vision/classification/resnet/model/resnet50-v1-7.onnx",
+        ass:vec![]
+    });
     testcases.push(Testcase{
         file: Path::new("squeezenet1.1-7.onnx"),
         url: "https://github.com/onnx/models/raw/main/vision/classification/squeezenet/model/squeezenet1.1-7.onnx", 
