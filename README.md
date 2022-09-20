@@ -1,10 +1,12 @@
 # z3shape
 
-Infer tensor shapes in ONNX using Z3.
+Infer tensor shapes in [ONNX](https://github.com/onnx/onnx/blob/main/docs/Operators.md) using [Z3](https://github.com/Z3Prover/z3).
 
 ## Usage
 ```
-# cargo test -- --nocapture automatically download squeezenet1.1-7.onnx from GitHub.
+> git clone https://github.com/akawashiro/z3shape.git
+> cd z3shape
+> cargo test -- --nocapture
 > cargo run squeezenet1.1-7.onnx
 ...
 squeezenet0_conv5_fwd_shape: [1, 64, 55, 55]              
@@ -22,8 +24,5 @@ cargo test -- --nocapture
 ```
 
 ## TODO
-- Constant propagation for Reshape
-- Improve coverage
-    - Tiny YOLOv2
-    - Bidirectional Attention Flow
+- Constant propagation
 - Parse argv
