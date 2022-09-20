@@ -18,6 +18,254 @@ fn shape_name(n: &str) -> String {
     String::from("shape_") + n
 }
 
+fn get_attribute<'a>(node: &'a onnx::NodeProto, att: &str) -> Option<&'a onnx::AttributeProto> {
+    for a in node.attribute.iter() {
+        if a.name == Some(att.to_string()) {
+            return Some(a);
+        }
+    }
+    None
+}
+
+fn append_gemm(node: &onnx::NodeProto, decares: &mut HashSet<Z3Exp>, conditions: &mut Vec<Z3Exp>) {
+    assert!(node.input.len() == 2 || node.input.len() == 3);
+    assert_eq!(node.output.len(), 1);
+
+    let trans_a = get_attribute(node, "transA").map_or(0, |a| a.i.map_or(0, |x| x));
+    let trans_b = get_attribute(node, "transB").map_or(0, |a| a.i.map_or(0, |x| x));
+
+    let mat_a = Z3Exp::Variable(shape_name(&node.input[0]));
+    let mat_b = Z3Exp::Variable(shape_name(&node.input[1]));
+    let mat_y = Z3Exp::Variable(shape_name(&node.output[0]));
+    decares.insert(dims_dec(shape_name(&node.input[0])));
+    decares.insert(dims_dec(shape_name(&node.input[1])));
+    decares.insert(dims_dec(shape_name(&node.output[0])));
+
+    let mut dim_m_a = first(mat_a.clone());
+    let mut dim_k_a = second(mat_a);
+    if trans_a == 1 {
+        std::mem::swap(&mut dim_m_a, &mut dim_k_a);
+    }
+    let mut dim_n_b = first(mat_b.clone());
+    let mut dim_k_b = second(mat_b);
+    if trans_b == 1 {
+        std::mem::swap(&mut dim_n_b, &mut dim_k_b);
+    }
+    let dim_m_y = first(mat_y.clone());
+    let dim_n_y = second(mat_y);
+
+    conditions.push(ass_eq(dim_m_a, dim_m_y));
+    conditions.push(ass_eq(dim_k_a, dim_k_b));
+    conditions.push(ass_eq(dim_n_b, dim_n_y));
+}
+
+fn append_pool(node: &onnx::NodeProto, decares: &mut HashSet<Z3Exp>, conditions: &mut Vec<Z3Exp>) {
+    assert_eq!(node.input.len(), 1);
+    assert_eq!(node.output.len(), 1);
+
+    let kernel_shape_att = get_attribute(node, "kernel_shape").unwrap();
+    let kernel_shape = &kernel_shape_att.ints;
+    assert_eq!(kernel_shape.len(), 2);
+
+    let default_pads = vec![0, 0, 0, 0];
+    let pads = get_attribute(node, "pads").map_or(&default_pads, |a| &a.ints);
+    assert_eq!(pads.len(), 4);
+
+    let strides_att = get_attribute(node, "strides").unwrap();
+    let strides = &strides_att.ints;
+    assert_eq!(strides.len(), 2);
+
+    decares.insert(dims_dec(shape_name(&node.input[0])));
+    decares.insert(dims_dec(shape_name(&node.output[0])));
+
+    let in_image = Z3Exp::Variable(shape_name(&node.input[0]));
+    let out_image = Z3Exp::Variable(shape_name(&node.output[0]));
+
+    let in_batch = head(in_image.clone());
+    let out_batch = head(out_image.clone());
+    conditions.push(ass_eq(in_batch, out_batch));
+
+    let in_ch = head(tail(in_image.clone()));
+    let out_ch = head(tail(out_image.clone()));
+    conditions.push(ass_eq(in_ch, out_ch));
+
+    let k_h = kernel_shape[0];
+    let k_w = kernel_shape[1];
+    let in_h = plus(
+        plus(head(tail(tail(in_image.clone()))), int(pads[0])),
+        int(pads[2]),
+    );
+    let in_w = plus(
+        plus(head(tail(tail(tail(in_image)))), int(pads[1])),
+        int(pads[3]),
+    );
+    let out_h = head(tail(tail(out_image.clone())));
+    let out_w = head(tail(tail(tail(out_image))));
+
+    let dilation = 1;
+
+    conditions.push(ass_eq(
+        plus(
+            div(sub(in_h, int((k_h - 1) * dilation + 1)), int(strides[0])),
+            int(1),
+        ),
+        out_h,
+    ));
+    conditions.push(ass_eq(
+        plus(
+            div(sub(in_w, int((k_w - 1) * dilation + 1)), int(strides[1])),
+            int(1),
+        ),
+        out_w,
+    ));
+}
+
+fn append_conv(node: &onnx::NodeProto, decares: &mut HashSet<Z3Exp>, conditions: &mut Vec<Z3Exp>) {
+    assert!(node.input.len() == 2 || node.input.len() == 3, "{:?}", node);
+    assert_eq!(node.output.len(), 1, "{:?}", node);
+
+    let dilations_att = get_attribute(node, "dilations").unwrap();
+    let dilations = &dilations_att.ints;
+    assert_eq!(dilations.len(), 2);
+
+    let group_att = get_attribute(node, "group").unwrap();
+    let group = group_att.i.unwrap();
+
+    let kernel_shape_att = get_attribute(node, "kernel_shape").unwrap();
+    let kernel_shape = &kernel_shape_att.ints;
+    assert_eq!(kernel_shape.len(), 2);
+
+    let default_pads = vec![0, 0, 0, 0];
+    let pads = get_attribute(node, "pads").map_or(&default_pads, |a| &a.ints);
+    assert_eq!(pads.len(), 4);
+
+    let strides_att = get_attribute(node, "strides").unwrap();
+    let strides = &strides_att.ints;
+    assert_eq!(strides.len(), 2);
+
+    decares.insert(dims_dec(shape_name(&node.input[0])));
+    decares.insert(dims_dec(shape_name(&node.input[1])));
+    decares.insert(dims_dec(shape_name(&node.output[0])));
+
+    let in_image = Z3Exp::Variable(shape_name(&node.input[0]));
+    let weight = Z3Exp::Variable(shape_name(&node.input[1]));
+    let out_image = Z3Exp::Variable(shape_name(&node.output[0]));
+
+    let in_batch = head(in_image.clone());
+    let out_batch = head(out_image.clone());
+    conditions.push(ass_eq(in_batch, out_batch));
+
+    let in_ch_eq = ass_eq(
+        head(tail(in_image.clone())),
+        mul(int(group), head(tail(weight.clone()))),
+    );
+    conditions.push(in_ch_eq);
+
+    let out_ch_eq1 = ass_eq(head(weight.clone()), head(tail(out_image.clone())));
+    conditions.push(out_ch_eq1);
+    if node.input.len() == 3 {
+        decares.insert(dims_dec(shape_name(&node.input[2])));
+        let bias = Z3Exp::Variable(shape_name(&node.input[2]));
+        let out_ch_eq2 = ass_eq(head(weight), head(bias));
+        conditions.push(out_ch_eq2);
+    }
+
+    let k_h = (kernel_shape[0] - 1) * dilations[0] + 1;
+    let k_w = (kernel_shape[1] - 1) * dilations[1] + 1;
+    let in_h = plus(
+        plus(head(tail(tail(in_image.clone()))), int(pads[0])),
+        int(pads[2]),
+    );
+    let in_w = plus(
+        plus(head(tail(tail(tail(in_image)))), int(pads[1])),
+        int(pads[3]),
+    );
+    let out_h = head(tail(tail(out_image.clone())));
+    let out_w = head(tail(tail(tail(out_image))));
+
+    conditions.push(ass_eq(div(sub(in_h, int(k_h - 1)), int(strides[0])), out_h));
+    conditions.push(ass_eq(div(sub(in_w, int(k_w - 1)), int(strides[1])), out_w));
+}
+
+fn append_bn(node: &onnx::NodeProto, decares: &mut HashSet<Z3Exp>, conditions: &mut Vec<Z3Exp>) {
+    assert_eq!(node.input.len(), 5);
+    assert_eq!(node.output.len(), 1);
+
+    let x = shape_name(&node.input[0]);
+    let scale = shape_name(&node.input[1]);
+    let b = shape_name(&node.input[2]);
+    let mean = shape_name(&node.input[3]);
+    let var = shape_name(&node.input[4]);
+    let o = shape_name(&node.output[0]);
+
+    decares.insert(dims_dec(x.clone()));
+    decares.insert(dims_dec(scale.clone()));
+    decares.insert(dims_dec(b.clone()));
+    decares.insert(dims_dec(mean.clone()));
+    decares.insert(dims_dec(var.clone()));
+    decares.insert(dims_dec(o.clone()));
+
+    let x_exp = Z3Exp::Variable(x);
+    let scale_exp = Z3Exp::Variable(scale);
+    let b_exp = Z3Exp::Variable(b);
+    let mean_exp = Z3Exp::Variable(mean);
+    let var_exp = Z3Exp::Variable(var);
+    let o_exp = Z3Exp::Variable(o);
+
+    conditions.push(ass_eq(x_exp.clone(), o_exp.clone()));
+    conditions.push(ass_eq(second(x_exp.clone()), first(scale_exp)));
+    conditions.push(ass_eq(second(x_exp.clone()), first(b_exp)));
+    conditions.push(ass_eq(second(x_exp.clone()), first(mean_exp)));
+    conditions.push(ass_eq(second(x_exp), first(var_exp)));
+}
+
+fn append_concat(
+    node: &onnx::NodeProto,
+    decares: &mut HashSet<Z3Exp>,
+    conditions: &mut Vec<Z3Exp>,
+) {
+    assert!(1 <= node.input.len(), "{:?}", node);
+    assert_eq!(node.output.len(), 1);
+    assert_eq!(node.attribute.len(), 1);
+    let axis = get_attribute(node, "axis").unwrap().i.unwrap();
+
+    let mut inputs = Vec::new();
+    let mut in_exps = Vec::new();
+    for i in node.input.iter() {
+        inputs.push(shape_name(i));
+        decares.insert(dims_dec(shape_name(i)));
+        in_exps.push(Z3Exp::Variable(shape_name(i)));
+    }
+
+    let o = shape_name(&node.output[0]);
+    decares.insert(Z3Exp::DecareConst(
+        o.clone(),
+        Z3Type::List(Box::new(Z3Type::Int)),
+    ));
+    let mut oexp = Z3Exp::Variable(o);
+
+    for _i in 0..axis {
+        let oh = first(oexp.clone());
+        for i in 0..in_exps.len() {
+            let h = first(in_exps[i].clone());
+            conditions.push(ass_eq(oh.clone(), h));
+            in_exps[i] = tail(in_exps[i].clone());
+        }
+
+        oexp = tail(oexp);
+    }
+
+    let mut in_concat = int(0);
+    for i in in_exps.iter() {
+        in_concat = plus(in_concat, head((*i).clone()));
+    }
+    conditions.push(ass_eq(in_concat, head(oexp.clone())));
+
+    for i in in_exps.iter() {
+        conditions.push(ass_eq(tail((*i).clone()), tail(oexp.clone())));
+    }
+}
+
 fn gen_constraints(model: &onnx::ModelProto) -> (HashSet<Z3Exp>, Vec<Z3Exp>) {
     let mut decares = HashSet::new();
     let mut conditions = Vec::new();
@@ -78,181 +326,34 @@ fn gen_constraints(model: &onnx::ModelProto) -> (HashSet<Z3Exp>, Vec<Z3Exp>) {
         }
     }
 
-    fn get_attribute<'a>(node: &'a onnx::NodeProto, att: &str) -> Option<&'a onnx::AttributeProto> {
-        for a in node.attribute.iter() {
-            if a.name == Some(att.to_string()) {
-                return Some(a);
-            }
-        }
-        None
-    }
-
     for node in model.graph.node.iter() {
         if let Some(op_type) = &node.op_type {
             if node.name == Some(String::from("Gather_100")) {
                 break;
             }
 
-            if op_type == "Reshape" || op_type == "Slice" {
+            if op_type == "Reshape"
+                || op_type == "Slice"
+                || op_type == "ConstantOfShape"
+                || op_type == "NonZero"
+            {
                 // TODO (akawashiro): We need constant propagation.
             } else if op_type == "Shape" {
                 // TODO (akawashiro): We need len(list) in Z3.
+            } else if op_type == "Flatten" {
+                // TODO (akawashiro): We need fold(mul, shape).
             } else if op_type == "Resize" {
             } else if op_type == "Constant" || op_type == "Gather" || op_type == "Unsqueeze" {
             } else if op_type == "Gemm" {
-                assert!(node.input.len() == 2 || node.input.len() == 3);
-                assert_eq!(node.output.len(), 1);
-
-                let trans_a = get_attribute(node, "transA").map_or(0, |a| a.i.map_or(0, |x| x));
-                let trans_b = get_attribute(node, "transB").map_or(0, |a| a.i.map_or(0, |x| x));
-
-                let mat_a = Z3Exp::Variable(shape_name(&node.input[0]));
-                let mat_b = Z3Exp::Variable(shape_name(&node.input[1]));
-                let mat_y = Z3Exp::Variable(shape_name(&node.output[0]));
-                decares.insert(dims_dec(shape_name(&node.input[0])));
-                decares.insert(dims_dec(shape_name(&node.input[1])));
-                decares.insert(dims_dec(shape_name(&node.output[0])));
-
-                let mut dim_m_a = first(mat_a.clone());
-                let mut dim_k_a = second(mat_a);
-                if trans_a == 1 {
-                    std::mem::swap(&mut dim_m_a, &mut dim_k_a);
-                }
-                let mut dim_n_b = first(mat_b.clone());
-                let mut dim_k_b = second(mat_b);
-                if trans_b == 1 {
-                    std::mem::swap(&mut dim_n_b, &mut dim_k_b);
-                }
-                let dim_m_y = first(mat_y.clone());
-                let dim_n_y = second(mat_y);
-
-                conditions.push(ass_eq(dim_m_a, dim_m_y));
-                conditions.push(ass_eq(dim_k_a, dim_k_b));
-                conditions.push(ass_eq(dim_n_b, dim_n_y));
+                append_gemm(node, &mut decares, &mut conditions);
             } else if op_type == "MaxPool" || op_type == "AveragePool" {
-                assert_eq!(node.input.len(), 1);
-                assert_eq!(node.output.len(), 1);
-
-                let kernel_shape_att = get_attribute(node, "kernel_shape").unwrap();
-                let kernel_shape = &kernel_shape_att.ints;
-                assert_eq!(kernel_shape.len(), 2);
-
-                let default_pads = vec![0, 0, 0, 0];
-                let pads = get_attribute(node, "pads").map_or(&default_pads, |a| &a.ints);
-                assert_eq!(pads.len(), 4);
-
-                let strides_att = get_attribute(node, "strides").unwrap();
-                let strides = &strides_att.ints;
-                assert_eq!(strides.len(), 2);
-
-                decares.insert(dims_dec(shape_name(&node.input[0])));
-                decares.insert(dims_dec(shape_name(&node.output[0])));
-
-                let in_image = Z3Exp::Variable(shape_name(&node.input[0]));
-                let out_image = Z3Exp::Variable(shape_name(&node.output[0]));
-
-                let in_batch = head(in_image.clone());
-                let out_batch = head(out_image.clone());
-                conditions.push(ass_eq(in_batch, out_batch));
-
-                let in_ch = head(tail(in_image.clone()));
-                let out_ch = head(tail(out_image.clone()));
-                conditions.push(ass_eq(in_ch, out_ch));
-
-                let k_h = kernel_shape[0];
-                let k_w = kernel_shape[1];
-                let in_h = plus(
-                    plus(head(tail(tail(in_image.clone()))), int(pads[0])),
-                    int(pads[2]),
-                );
-                let in_w = plus(
-                    plus(head(tail(tail(tail(in_image)))), int(pads[1])),
-                    int(pads[3]),
-                );
-                let out_h = head(tail(tail(out_image.clone())));
-                let out_w = head(tail(tail(tail(out_image))));
-
-                let dilation = 1;
-
-                conditions.push(ass_eq(
-                    plus(
-                        div(sub(in_h, int((k_h - 1) * dilation + 1)), int(strides[0])),
-                        int(1),
-                    ),
-                    out_h,
-                ));
-                conditions.push(ass_eq(
-                    plus(
-                        div(sub(in_w, int((k_w - 1) * dilation + 1)), int(strides[1])),
-                        int(1),
-                    ),
-                    out_w,
-                ));
+                append_pool(node, &mut decares, &mut conditions);
             } else if op_type == "Conv" {
-                assert!(node.input.len() == 2 || node.input.len() == 3, "{:?}", node);
-                assert_eq!(node.output.len(), 1, "{:?}", node);
-
-                let dilations_att = get_attribute(node, "dilations").unwrap();
-                let dilations = &dilations_att.ints;
-                assert_eq!(dilations.len(), 2);
-
-                let group_att = get_attribute(node, "group").unwrap();
-                let group = group_att.i.unwrap();
-
-                let kernel_shape_att = get_attribute(node, "kernel_shape").unwrap();
-                let kernel_shape = &kernel_shape_att.ints;
-                assert_eq!(kernel_shape.len(), 2);
-
-                let default_pads = vec![0, 0, 0, 0];
-                let pads = get_attribute(node, "pads").map_or(&default_pads, |a| &a.ints);
-                assert_eq!(pads.len(), 4);
-
-                let strides_att = get_attribute(node, "strides").unwrap();
-                let strides = &strides_att.ints;
-                assert_eq!(strides.len(), 2);
-
-                decares.insert(dims_dec(shape_name(&node.input[0])));
-                decares.insert(dims_dec(shape_name(&node.input[1])));
-                decares.insert(dims_dec(shape_name(&node.output[0])));
-
-                let in_image = Z3Exp::Variable(shape_name(&node.input[0]));
-                let weight = Z3Exp::Variable(shape_name(&node.input[1]));
-                let out_image = Z3Exp::Variable(shape_name(&node.output[0]));
-
-                let in_batch = head(in_image.clone());
-                let out_batch = head(out_image.clone());
-                conditions.push(ass_eq(in_batch, out_batch));
-
-                let in_ch_eq = ass_eq(
-                    head(tail(in_image.clone())),
-                    mul(int(group), head(tail(weight.clone()))),
-                );
-                conditions.push(in_ch_eq);
-
-                let out_ch_eq1 = ass_eq(head(weight.clone()), head(tail(out_image.clone())));
-                conditions.push(out_ch_eq1);
-                if node.input.len() == 3 {
-                    decares.insert(dims_dec(shape_name(&node.input[2])));
-                    let bias = Z3Exp::Variable(shape_name(&node.input[2]));
-                    let out_ch_eq2 = ass_eq(head(weight), head(bias));
-                    conditions.push(out_ch_eq2);
-                }
-
-                let k_h = (kernel_shape[0] - 1) * dilations[0] + 1;
-                let k_w = (kernel_shape[1] - 1) * dilations[1] + 1;
-                let in_h = plus(
-                    plus(head(tail(tail(in_image.clone()))), int(pads[0])),
-                    int(pads[2]),
-                );
-                let in_w = plus(
-                    plus(head(tail(tail(tail(in_image)))), int(pads[1])),
-                    int(pads[3]),
-                );
-                let out_h = head(tail(tail(out_image.clone())));
-                let out_w = head(tail(tail(tail(out_image))));
-
-                conditions.push(ass_eq(div(sub(in_h, int(k_h - 1)), int(strides[0])), out_h));
-                conditions.push(ass_eq(div(sub(in_w, int(k_w - 1)), int(strides[1])), out_w));
+                append_conv(node, &mut decares, &mut conditions);
+            } else if op_type == "BatchNormalization" {
+                append_bn(node, &mut decares, &mut conditions);
+            } else if op_type == "Concat" {
+                append_concat(node, &mut decares, &mut conditions);
             } else if op_type == "GlobalAveragePool" {
                 assert_eq!(node.input.len(), 1);
                 assert_eq!(node.input.len(), node.output.len());
@@ -261,10 +362,6 @@ fn gen_constraints(model: &onnx::ModelProto) -> (HashSet<Z3Exp>, Vec<Z3Exp>) {
                 let o = shape_name(&node.output[0]);
                 decares.insert(dims_dec(i.clone()));
                 decares.insert(dims_dec(o.clone()));
-                // conditions.push(ass_eq(first(Z3Exp::Variable(i.clone())), first(Z3Exp::Variable(o.clone()))));
-                // conditions.push(ass_eq(second(Z3Exp::Variable(i.clone())), second(Z3Exp::Variable(o))));
-                // conditions.push(ass_eq(third(Z3Exp::Variable(i.clone())), int(1)));
-                // conditions.push(ass_eq(forth(Z3Exp::Variable(i)), int(1)));
             } else if op_type == "Relu"
                 || op_type == "Dropout"
                 || op_type == "Clip"
@@ -301,79 +398,6 @@ fn gen_constraints(model: &onnx::ModelProto) -> (HashSet<Z3Exp>, Vec<Z3Exp>) {
                     Box::new(Z3Exp::Variable(i1)),
                     Box::new(Z3Exp::Variable(o)),
                 ))));
-            } else if op_type == "Concat" {
-                assert!(1 <= node.input.len(), "{:?}", node);
-                assert_eq!(node.output.len(), 1);
-                assert_eq!(node.attribute.len(), 1);
-                let axis = get_attribute(node, "axis").unwrap().i.unwrap();
-
-                let mut inputs = Vec::new();
-                let mut in_exps = Vec::new();
-                for i in node.input.iter() {
-                    inputs.push(shape_name(i));
-                    decares.insert(dims_dec(shape_name(i)));
-                    in_exps.push(Z3Exp::Variable(shape_name(i)));
-                }
-
-                let o = shape_name(&node.output[0]);
-                decares.insert(Z3Exp::DecareConst(
-                    o.clone(),
-                    Z3Type::List(Box::new(Z3Type::Int)),
-                ));
-                let mut oexp = Z3Exp::Variable(o);
-
-                for _i in 0..axis {
-                    let oh = first(oexp.clone());
-                    for i in 0..in_exps.len() {
-                        let h = first(in_exps[i].clone());
-                        conditions.push(ass_eq(oh, h));
-                        in_exps[i] = tail(in_exps[i]);
-                    }
-
-                    oexp = tail(oexp);
-                }
-
-                let mut in_concat = int(0);
-                for i in in_exps.iter() {
-                    in_concat = plus(in_concat, *i);
-                }
-                conditions.push(ass_eq(in_concat, head(oexp.clone())));
-
-                for i in in_exps.iter() {
-                    conditions.push(ass_eq(tail(*i), tail(oexp)));
-                }
-            } else if op_type == "BatchNormalization" {
-                assert_eq!(node.input.len(), 5);
-                assert_eq!(node.output.len(), 1);
-
-                let x = shape_name(&node.input[0]);
-                let scale = shape_name(&node.input[1]);
-                let b = shape_name(&node.input[2]);
-                let mean = shape_name(&node.input[3]);
-                let var = shape_name(&node.input[4]);
-                let o = shape_name(&node.output[0]);
-
-                decares.insert(dims_dec(x.clone()));
-                decares.insert(dims_dec(scale.clone()));
-                decares.insert(dims_dec(b.clone()));
-                decares.insert(dims_dec(mean.clone()));
-                decares.insert(dims_dec(var.clone()));
-                decares.insert(dims_dec(o.clone()));
-
-                let x_exp = Z3Exp::Variable(x);
-                let scale_exp = Z3Exp::Variable(scale);
-                let b_exp = Z3Exp::Variable(b);
-                let mean_exp = Z3Exp::Variable(mean);
-                let var_exp = Z3Exp::Variable(var);
-                let o_exp = Z3Exp::Variable(o);
-
-                conditions.push(ass_eq(x_exp.clone(), o_exp.clone()));
-                conditions.push(ass_eq(second(x_exp.clone()), first(scale_exp)));
-                conditions.push(ass_eq(second(x_exp.clone()), first(b_exp)));
-                conditions.push(ass_eq(second(x_exp.clone()), first(mean_exp)));
-                conditions.push(ass_eq(second(x_exp), first(var_exp)));
-            } else if op_type == "Flatten" {
-                // TODO (akawashiro): We need fold(mul, shape).
             } else {
                 unreachable!("Unknown op {:?}", node);
             }
@@ -432,12 +456,14 @@ fn shape_infer(onnx_path: &Path) -> Option<Z3Result> {
     }
 }
 
+#[allow(dead_code)]
 struct Testcase<'a> {
     file: &'a Path,
     url: &'a str,
     ass: Vec<(&'a str, Vec<i64>)>,
 }
 
+#[allow(dead_code)]
 fn shape_partial_eq(s1: &Vec<i64>, s2: &Vec<i64>) -> bool {
     for (d1, d2) in s1.iter().zip(s2.iter()) {
         if d1 != d2 {
@@ -450,21 +476,21 @@ fn shape_partial_eq(s1: &Vec<i64>, s2: &Vec<i64>) -> bool {
 #[test]
 fn e2e_test() {
     let mut testcases = Vec::new();
-    testcases.push(Testcase{
-        file: Path::new("MaskRCNN-10.onnx"),
-        url: "https://github.com/onnx/models/raw/main/vision/object_detection_segmentation/mask-rcnn/model/MaskRCNN-10.onnx",
-        ass:vec![]
-    });
-    testcases.push(Testcase{
-        file: Path::new("tinyyolov2-7.onnx"),
-        url: "https://github.com/onnx/models/raw/main/vision/object_detection_segmentation/tiny-yolov2/model/tinyyolov2-7.onnx",
-        ass:vec![]
-    });
-    testcases.push(Testcase{
-        file: Path::new("resnet50-v1-7.onnx"),
-        url: "https://github.com/onnx/models/raw/main/vision/classification/resnet/model/resnet50-v1-7.onnx",
-        ass:vec![]
-    });
+    // testcases.push(Testcase{
+    //     file: Path::new("MaskRCNN-10.onnx"),
+    //     url: "https://github.com/onnx/models/raw/main/vision/object_detection_segmentation/mask-rcnn/model/MaskRCNN-10.onnx",
+    //     ass:vec![]
+    // });
+    // testcases.push(Testcase{
+    //     file: Path::new("tinyyolov2-7.onnx"),
+    //     url: "https://github.com/onnx/models/raw/main/vision/object_detection_segmentation/tiny-yolov2/model/tinyyolov2-7.onnx",
+    //     ass:vec![]
+    // });
+    // testcases.push(Testcase{
+    //     file: Path::new("resnet50-v1-7.onnx"),
+    //     url: "https://github.com/onnx/models/raw/main/vision/classification/resnet/model/resnet50-v1-7.onnx",
+    //     ass:vec![]
+    // });
     testcases.push(Testcase{
         file: Path::new("squeezenet1.1-7.onnx"),
         url: "https://github.com/onnx/models/raw/main/vision/classification/squeezenet/model/squeezenet1.1-7.onnx", 

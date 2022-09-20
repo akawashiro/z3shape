@@ -103,10 +103,12 @@ pub fn second(e: Z3Exp) -> Z3Exp {
     head(tail(e))
 }
 
+#[allow(dead_code)]
 pub fn third(e: Z3Exp) -> Z3Exp {
     head(tail(tail(e)))
 }
 
+#[allow(dead_code)]
 pub fn forth(e: Z3Exp) -> Z3Exp {
     head(tail(tail(tail(e))))
 }
