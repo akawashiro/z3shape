@@ -46,8 +46,8 @@ fn append_gemm(node: &onnx::NodeProto, decares: &mut HashSet<Z3Exp>, conditions:
     if trans_a == 1 {
         std::mem::swap(&mut dim_m_a, &mut dim_k_a);
     }
-    let mut dim_n_b = first(mat_b.clone());
-    let mut dim_k_b = second(mat_b);
+    let mut dim_k_b = first(mat_b.clone());
+    let mut dim_n_b = second(mat_b);
     if trans_b == 1 {
         std::mem::swap(&mut dim_n_b, &mut dim_k_b);
     }
@@ -353,11 +353,11 @@ fn gen_constraints(model: &onnx::ModelProto) -> (HashSet<Z3Exp>, Vec<Z3Exp>) {
     }
 
     for node in model.graph.node.iter() {
-        if let Some(op_type) = &node.op_type {
-            if node.name == Some(String::from("Gather_100")) {
-                break;
-            }
+        // if node.input[0] == "flatten_473" {
+        //     break;
+        // }
 
+        if let Some(op_type) = &node.op_type {
             if op_type == "Reshape"
                 || op_type == "Slice"
                 || op_type == "ConstantOfShape"
