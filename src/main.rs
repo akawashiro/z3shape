@@ -285,7 +285,10 @@ fn append_transpose(
     let transposed_exp = Z3Exp::Variable(transposed);
 
     for (i, p) in perm.iter().enumerate() {
-        conditions.push(ass_eq(nth(*p, data_exp.clone()), nth(i.try_into().unwrap(), transposed_exp.clone())));
+        conditions.push(ass_eq(
+            nth(*p, data_exp.clone()),
+            nth(i.try_into().unwrap(), transposed_exp.clone()),
+        ));
     }
 }
 
@@ -500,25 +503,58 @@ fn shape_partial_eq(s1: &Vec<i64>, s2: &Vec<i64>) -> bool {
     true
 }
 
+#[allow(dead_code)]
+fn run_testcase(test: &Testcase) {
+    let retry_z3 = 20;
+
+    let d1: Vec<i64> = Vec::new();
+    let d2: Vec<i64> = Vec::new();
+    let mut failed_shapes = vec![(d1, d2, "dummy")];
+
+    // Hmm... The output of Z3 is not decidable. We need some retries to get the answer.
+    for _i in 0..retry_z3 {
+        if !test.file.exists() {
+            println!("Download {} from github", test.file.to_string_lossy());
+            let responce = reqwest::blocking::get(&*test.url)
+                .expect(&(String::from("Failed to download from ") + test.url));
+            let contents = responce.bytes().expect("No contents in response");
+            let mut out = File::create(test.file).expect("failed to create file");
+            out.write_all(&contents)
+                .expect("Failed to write contents to the file");
+        }
+        if let Some(result) = shape_infer(test.file) {
+            let mut f: Vec<(Vec<i64>, Vec<i64>, &str)> = Vec::new();
+            for (k, s1) in test.ass.iter() {
+                let s2 = result.shapes.get(&String::from(*k)).expect(k);
+                if s1 != s2 {
+                    f.push((s1.clone(), s2.clone(), *k));
+                }
+            }
+            failed_shapes = f.clone();
+            if failed_shapes.len() == 0 {
+                break;
+            }
+        } else {
+            unreachable!();
+        }
+    }
+
+    assert_eq!(failed_shapes.len(), 0, "{:?}", failed_shapes);
+}
+
 #[test]
-fn e2e_test() {
-    let mut testcases = Vec::new();
-    testcases.push(Testcase{
-        file: Path::new("MaskRCNN-10.onnx"),
-        url: "https://github.com/onnx/models/raw/main/vision/object_detection_segmentation/mask-rcnn/model/MaskRCNN-10.onnx",
-        ass:vec![]
-    });
-    testcases.push(Testcase{
-        file: Path::new("tinyyolov2-7.onnx"),
-        url: "https://github.com/onnx/models/raw/main/vision/object_detection_segmentation/tiny-yolov2/model/tinyyolov2-7.onnx",
-        ass:vec![]
-    });
-    testcases.push(Testcase{
+fn resnet_test() {
+    let t = Testcase{
         file: Path::new("resnet50-v1-7.onnx"),
         url: "https://github.com/onnx/models/raw/main/vision/classification/resnet/model/resnet50-v1-7.onnx",
         ass:vec![]
-    });
-    testcases.push(Testcase{
+    };
+    run_testcase(&t);
+}
+
+#[test]
+fn squeezenet_test() {
+    let t = Testcase{
         file: Path::new("squeezenet1.1-7.onnx"),
         url: "https://github.com/onnx/models/raw/main/vision/classification/squeezenet/model/squeezenet1.1-7.onnx", 
         ass:vec![
@@ -527,53 +563,40 @@ fn e2e_test() {
             ("shape_squeezenet0_concat7", vec![1, 512, 13, 13]),
             ("shape_squeezenet0_dropout0_fwd", vec![1, 512, 13, 13]),
             ("shape_squeezenet0_conv25_fwd", vec![1, 1000, 13, 13]), 
-        ]});
-    testcases.push(Testcase{
+        ]};
+    run_testcase(&t);
+}
+
+#[test]
+fn mobilenet_test() {
+    let t = Testcase{
         file: Path::new("mobilenetv2-7.onnx"),
         url: "https://github.com/onnx/models/raw/main/vision/classification/mobilenet/model/mobilenetv2-7.onnx",
         ass:vec![
             ("shape_477", vec![0,32,112,112]),
             ("shape_474", vec![0,32,112,112]),
             ("shape_317", vec![0,32,112,112])
-        ]});
+        ]};
+    run_testcase(&t);
+}
 
-    for t in testcases.iter() {
-        let retry_z3 = 20;
-
-        let d1: Vec<i64> = Vec::new();
-        let d2: Vec<i64> = Vec::new();
-        let mut failed_shapes = vec![(d1, d2, "dummy")];
-
-        // Hmm... The output of Z3 is not decidable. We need some retries to get the answer.
-        for _i in 0..retry_z3 {
-            if !t.file.exists() {
-                println!("Download {} from github", t.file.to_string_lossy());
-                let responce = reqwest::blocking::get(&*t.url)
-                    .expect(&(String::from("Failed to download from ") + t.url));
-                let contents = responce.bytes().expect("No contents in response");
-                let mut out = File::create(t.file).expect("failed to create file");
-                out.write_all(&contents)
-                    .expect("Failed to write contents to the file");
-            }
-            if let Some(result) = shape_infer(t.file) {
-                let mut f: Vec<(Vec<i64>, Vec<i64>, &str)> = Vec::new();
-                for (k, s1) in t.ass.iter() {
-                    let s2 = result.shapes.get(&String::from(*k)).expect(k);
-                    if s1 != s2 {
-                        f.push((s1.clone(), s2.clone(), *k));
-                    }
-                }
-                failed_shapes = f.clone();
-                if failed_shapes.len() == 0 {
-                    break;
-                }
-            } else {
-                unreachable!();
-            }
-        }
-
-        assert_eq!(failed_shapes.len(), 0, "{:?}", failed_shapes);
-    }
+#[test]
+fn maskrcnn_test() {
+    let t = Testcase{
+        file: Path::new("MaskRCNN-10.onnx"),
+        url: "https://github.com/onnx/models/raw/main/vision/object_detection_segmentation/mask-rcnn/model/MaskRCNN-10.onnx",
+        ass:vec![]
+    } ;
+    run_testcase(&t);
+}
+#[test]
+fn tinyyolo_test() {
+    let t = Testcase{
+        file: Path::new("tinyyolov2-7.onnx"),
+        url: "https://github.com/onnx/models/raw/main/vision/object_detection_segmentation/tiny-yolov2/model/tinyyolov2-7.onnx",
+        ass:vec![]
+    } ;
+    run_testcase(&t);
 }
 
 fn main() {
