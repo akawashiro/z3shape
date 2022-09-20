@@ -359,6 +359,7 @@ fn gen_constraints(model: &onnx::ModelProto) -> (HashSet<Z3Exp>, Vec<Z3Exp>) {
                 || op_type == "Slice"
                 || op_type == "ConstantOfShape"
                 || op_type == "NonZero"
+                || op_type == "Expand"
             {
                 // TODO (akawashiro): We need constant propagation.
             } else if op_type == "Shape" {
@@ -392,6 +393,7 @@ fn gen_constraints(model: &onnx::ModelProto) -> (HashSet<Z3Exp>, Vec<Z3Exp>) {
                 || op_type == "Clip"
                 || op_type == "LeakyRelu"
                 || op_type == "Cast"
+                || op_type == "Sigmoid"
             {
                 assert_eq!(node.input.len(), 1);
                 assert_eq!(node.input.len(), node.output.len());
